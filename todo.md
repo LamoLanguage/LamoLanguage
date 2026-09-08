@@ -2,9 +2,10 @@
 
 This file tracks implementation work per phase. Sprint 2.5.0 completed every
 outstanding item below; each completed row carries a short evidence note
-pointing at the code, docs, or tests that fulfill it. Genuinely new work
-discovered along the way is listed under **Open Follow-Ups** and should be
-picked up before (or alongside) any larger new feature.
+pointing at the code, docs, or tests that fulfill it. Sprint 2.6.0 completed
+the entire **Open Follow-Ups** ledger (see "Completed in 2.6.0"); the
+**Open Follow-Ups** section below now lists genuinely new work discovered
+along the way.
 
 ## Status Snapshot
 
@@ -20,31 +21,46 @@ picked up before (or alongside) any larger new feature.
 | Phase 7 — Language features & generics | ✅ Complete (2.5.0) |
 | Phase 8 — Standard library | ✅ Complete |
 | Phase 9 — Developer experience | ✅ Complete |
-| Phase 10 — Multi-file projects | ✅ Complete (module rules → Open Follow-Ups) |
+| Phase 10 — Multi-file projects | ✅ Complete (module rules closed in 2.6.0) |
 | Phase 11 — Backend evolution | ✅ Complete (VM/LLVM deferred by design) |
 | Cross-cutting work | ✅ Ongoing policy, currently honored |
+| Open Follow-Ups (2.5.0 ledger) | ✅ Complete (2.6.0) |
 
 ## Open Follow-Ups
 
-Honest ledger of work discovered but **not** completed in 2.5.0:
+Honest ledger of work discovered but **not** completed in 2.6.0:
 
-- [ ] **Tagged-union enums** — payload-carrying variants + `Some(x) =>`
-      binding. Prerequisite for pattern-matched `Option`/`Result` per
-      [RFC-generics](docs/RFC-generics.md) §10; PR 5 ships a function-shaped
-      API in the meantime.
-- [ ] **Module-boundary type flow** — let imported functions return
-      struct-typed values usable for field access/methods in the importing
-      file (today they erase to opaque arrays when declared locally inside
-      modules; PR 5 works around it with array payloads). Design needed in
-      `modules.c`/`semantic.c`.
-- [ ] **Explicit type arguments on module member calls** (`col.f<int>(...)`)
-      — plain calls accept them today; member chains do not. Parser probe
-      exists; needs `ASTMemberCall` plumbing.
-- [ ] **Boolean print form** — should `print(true)` render `%true`/`%false`
-      instead of `1`/`0`? Decide and spec it before anyone depends on it.
-- [ ] **Module rules carried over from Phases 7/10** — explicit export rules,
-      package/folder-based modules, duplicate-import behavior, entry-file vs
-      library-file expectations, and module loading for `lamo eval`/`lamo repl`.
+- [ ] **Enum type annotations** — `let o: Option<int> = ...` and enum-typed
+      parameters/returns. Tagged-union enums ship with inference only; the
+      annotation resolver needs an enum-aware arm (see SPEC §3.5).
+- [ ] **Pattern destructuring & guards** — nested payload patterns
+      (`Some(Pair(a, b))`) and `when` guards in `match` (SPEC §4.6/§13).
+- [ ] **pub step 2** — enforce §10.6: non-`pub` members become unresolvable
+      through aliases; the step-1 warning becomes an error (one release
+      after 2.6.0).
+- [ ] **Variant qualification** — cross-enum variant name shadowing is still
+      resolved by "later wins" (SPEC §3.5 known wart); `Enum::Variant`
+      qualification is the fix.
+- [ ] **Windows eval/REPL parity checks** — 2.6.0 was developed and tested on
+      POSIX; the eval suite section in run_tests.ps1 still needs the new
+      tests/eval cases mirrored.
+
+## Completed in 2.6.0
+
+Every item from the 2.5.0 Open Follow-Ups ledger, with evidence:
+
+| Item | Evidence |
+|------|----------|
+| **Tagged-union enums** — payload variants + `Some(x) =>` binding | SPEC §3.5/§4.6; `enum Option<T> { Some(T), None }`, multi-payload variants, generic enum params, constructor arity/type validation, tagged equality + rendering (`Some(42)`); runtime `LAMO_VALUE_ENUM`; tests `tests/runtime/enum_tagged.lamo` + 5 smoke cases; RFC-generics §10 marked RESOLVED |
+| **Module-boundary type flow** — struct-typed returns usable across imports | SPEC §5.5/§10.2; semantic restructure (module calls now run the full signature-binding path; struct return propagation); field access / methods / field assignment / chaining all work; test `tests/runtime/module_struct_flow.lamo` (+`tests/runtime/modlib/geometry.lamo`) |
+| **Explicit type arguments on module member calls** | SPEC §5.5; `col.pick<int>(3, 4)` parses in expression, statement, and chained positions (scanner-gated probe); count-mismatch errors; tests `tests/smoke/parse_member_type_args.*`, `err_member_type_arg_count.*` |
+| **Boolean print form** — decided and specced | SPEC §8.1: `print(b)` renders `true`/`false` everywhere (was `1`/`0` at top level but `true` inside arrays — internally inconsistent); runtime fix + tests `tests/runtime/bool_print.lamo` |
+| **Module rules** (Phase 7/10 leftovers) | see the five rows below |
+| — explicit export rules | SPEC §10.6 step 1: contextual `pub` on top-level decls; one-time non-pub-via-alias warnings; tests `tests/smoke/warn_not_pub_member.*` |
+| — package/folder-based modules | SPEC §10.3: `import utils` falls back to `utils/mod.lamo`; test `tests/runtime/folder_import.lamo` |
+| — duplicate-import behavior | SPEC §10.5 decision table; alias conflict is a compile error; test `tests/smoke/err_alias_conflict.*` |
+| — entry-file vs library-file expectations | SPEC §12.1: entry `fn main()` now actually CALLED (latent codegen bug fixed — the README hello world printed nothing), with a back-compat guard for explicit `main()` calls; imported `fn main` warns it will not run; tests `tests/runtime/entry_main.lamo`, golden `hello_fn` unchanged |
+| — module loading for `lamo eval`/`lamo repl` | SPEC §10.7 revised: member calls + qualified globals resolve in the interpreter; REPL executes import statements; new eval suite section (`tests/eval/`, runner §3.5) |
 
 ## Completed Work
 

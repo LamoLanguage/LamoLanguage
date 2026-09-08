@@ -29,19 +29,20 @@ Instead of executing code through a virtual machine, **Lamo transpiles your prog
 - ⚡ **Transpiles to C** — native executables, no VM
 - 🧠 **Clean, readable syntax** — optional semicolons, Python-like truthiness
 - 🧬 **Generics** — generic functions, structs, `impl<T>`, and constraints (`T: Ord`)
+- 🏷 **Tagged-union enums** — `Option<T> { Some(T), None }` with `Some(x) =>` match bindings
 - 🏗 **Structs & methods** — `struct` / `impl` blocks with implicit `self`
 - 📚 **Enums & `match`** — variant patterns with exhaustiveness warnings
 - 📋 **Arrays** — dynamic arrays with negative indexing and a typed `array<T>` mode
 - 🔍 **Semantic analysis** — scope tracking, type checking, compile-time errors with hints
 - 🎨 **Colorized diagnostics** — `file:line:col`, source snippets, carets, and hints
-- 📁 **Module system** — namespaced imports (`import std.io`, `import "file.lamo" as alias`)
+- 📁 **Module system** — namespaced imports (`import std.io`), `pub` export markers, folder modules
 - 📦 **Built-in package manager** — `lamo install`, lockfile, version pinning
 - 🌐 **Native HTTP server** — server builtins in the runtime
 - 🖥 **Native GUI support** — Win32 and X11 backends
 - 🗑 **Opt-in garbage collector** — mark-sweep GC for long-running programs
 - 🧪 **Built-in testing** — `lamo test` plus the `std.testing` module
 - 🛠 **Code formatter** — `lamo fmt` normalizes whitespace-level style
-- 🔁 **REPL & eval** — fast feedback without a C-compile step
+- 🔁 **REPL & eval** — fast feedback, now with module loading
 
 ---
 
@@ -163,18 +164,20 @@ Runnable programs live in [`examples/`](examples/) and [`std/examples/`](std/exa
 
 ## Project Status
 
-The current implementation (v2.5.0) includes:
+The current implementation (v2.6.0) includes:
 
 - ✅ Lexer, parser, AST
 - ✅ Semantic analyzer (scopes, types, generics binding, constraints)
 - ✅ C backend with embedded runtime
 - ✅ Structs, methods, arrays, enums, match
 - ✅ Generics (PRs 1–6): generic functions/structs/impls, `array<T>`, constraints
-- ✅ Modules & namespaced imports
+- ✅ Tagged-union enums — payload variants, `Some(x) =>` match bindings
+- ✅ Modules & namespaced imports — struct-typed returns across boundaries,
+  explicit `pub` export markers, folder-based modules, module loading in eval/REPL
 - ✅ Package manager (`lampm` integrated into the `lamo` binary)
 - ✅ REPL and eval
 - ✅ Formatter
-- ✅ Test harness: smoke, golden, runtime, stdlib suites
+- ✅ Test harness: smoke, golden, runtime, eval, stdlib suites
 - ✅ Opt-in mark-sweep GC
 - ✅ HTTP server & GUI builtins
 
@@ -182,9 +185,12 @@ The current implementation (v2.5.0) includes:
 
 Next up (see [`roadmap.md`](roadmap.md) and [`todo.md`](todo.md) for the full picture):
 
-- [ ] Tagged-union enums (payload-carrying variants, `Some(x) =>` binding in `match`)
-- [ ] Module-boundary type flow (struct-typed return values across imports)
-- [ ] Explicit type arguments on module member calls
+- [x] Tagged-union enums (payload-carrying variants, `Some(x) =>` binding in `match`)
+- [x] Module-boundary type flow (struct-typed return values across imports)
+- [x] Explicit type arguments on module member calls
+- [x] Boolean print form (`print(true)` renders `true` — decided + specced in SPEC §8.1)
+- [x] Module rules: `pub` export markers, folder modules, duplicate-import
+      decisions, entry-file `main()` semantics, eval/REPL module loading
 - [ ] Traits
 - [ ] Better formatter (AST-based pretty-printer)
 - [ ] Language Server (LSP)

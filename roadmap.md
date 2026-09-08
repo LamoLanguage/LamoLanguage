@@ -29,6 +29,13 @@ track *what it means*.
 
 ## Release Highlights
 
+**2.6.0** — the entire Open Follow-Ups ledger closed: tagged-union enums
+(`Some(x) =>` bindings), module-boundary struct type flow, explicit type
+arguments on module member calls, the boolean print form decision
+(`true`/`false`), and the module rules set (entry `main()` actually invoked,
+contextual `pub` with the §10.6 step-1 warnings, folder-based modules,
+formalized duplicate-import behavior, and module loading in eval/REPL).
+
 **2.5.0** — Generics PRs 1–6 complete: generic functions with inference and
 explicit call arguments, typed `array<T>`, constraints (`T: Ord`), `impl<T>`,
 typed stdlib collections plus `Option`/`Result` APIs. Also: `print()` driven
@@ -59,27 +66,27 @@ CLI refactor into `src/cli/`.
 | 7 | Language features & generics | ✅ Done — generics PRs 1–6 shipped (2.5.0) |
 | 8 | Standard library | ✅ Done — 15 modules + organization rules |
 | 9 | Developer experience | ✅ Done — REPL, scaffolding, hints, color, formatter |
-| 10 | Multi-file projects | ✅ Mostly done — visibility decision recorded; some module rules still open |
+| 10 | Multi-file projects | ✅ Done — module rules closed in 2.6.0 ([SPEC §10](docs/SPEC.md)) |
 | 11 | Backend evolution | ✅ Done — annotated-AST contract; VM/LLVM deferred with preconditions |
 
 Per-item detail lives in [`todo.md`](todo.md).
 
 ## Current Priorities
 
-The next meaningful work, in suggested order:
+The next meaningful work, in suggested order (the 2.5.0 follow-up ledger is
+closed — see the new [todo.md](todo.md) Open Follow-Ups for what 2.6.0
+discovered):
 
-1. **Tagged-union enums** — payload-carrying variants (`Some(x) =>` binding).
-   Prerequisite for pattern-matched `Option`/`Result` per the generics RFC §10.
-2. **Module-boundary type flow** — let imported functions return struct-typed
-   values usable for field access/methods in the importing file (today they
-   erase to opaque arrays across module boundaries).
-3. **Explicit type arguments on module member calls** (`col.f<int>(...)`) —
-   plain calls accept them today; member chains do not.
-4. **Boolean print form** — decide whether `print(true)` should render
-   `true`/`false` instead of `1`/`0`, and spec it before anyone depends on it.
-5. **Remaining module rules** (Phase 7/10 leftovers) — explicit export rules,
-   package/folder-based modules, duplicate-import behavior, entry-file vs
-   library-file expectations, and module loading for `lamo eval`/`lamo repl`.
+1. **Enum type annotations** — `Option<int>` in let/param/return positions
+   (the tagged-enum runtime landed in 2.6.0; the annotation resolver needs
+   an enum-aware arm).
+2. **Pattern destructuring & guards** — nested payloads and `when` clauses
+   in `match`.
+3. **pub step 2** — enforce the §10.6 boundary after one release of
+   step-1 warnings.
+4. **Traits** — first-class constraints beyond the catalogue.
+5. **Better formatter** (AST-based pretty-printer), **LSP**, **VSCode
+   extension**, **documentation website**.
 
 ## Guiding Principles
 
