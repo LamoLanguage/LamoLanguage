@@ -1,0 +1,56 @@
+// Generics PR 1: generic struct declarations + type parameters in field types.
+// Tests: declaration with <T>, <A,B>; literal with type args; field access;
+// multiple distinct instantiations; methods on generic structs (with the
+// implicit-self convention — `self` is not a parameter, the codegen injects
+// it as the first argument at call sites).
+
+// Single type parameter
+struct Box<T> {
+    value: T,
+    label: string
+}
+
+// Two type parameters
+struct Pair<A, B> {
+    first: A,
+    second: B
+}
+
+// Method on a generic struct (self is implicit; methods don't redeclare
+// type params in PR 1 — the impl block uses the struct's params).
+impl Box {
+    fn get_value() -> int {
+        return self.value
+    }
+    fn get_label() -> string {
+        return self.label
+    }
+}
+
+// Single type param, instantiated with int.
+let bi = Box<int> { value: 42, label: "answer" }
+print(bi.value)
+print(bi.label)
+bi.value = 100
+print(bi.value)
+print(bi.get_value())
+print(bi.get_label())
+
+// Single type param, instantiated with string. Same runtime layout,
+// different compile-time type.
+let bs = Box<string> { value: "hello", label: "greeting" }
+print(bs.value)
+print(bs.label)
+
+// Two type params, mixed concrete types.
+let p1 = Pair<int, string> { first: 1, second: "one" }
+print(p1.first)
+print(p1.second)
+
+let p2 = Pair<string, int> { first: "two", second: 2 }
+print(p2.first)
+print(p2.second)
+
+// Pair of int, int — verifies that ordering of type args matters.
+let p3 = Pair<int, int> { first: 10, second: 20 }
+print(p3.first + p3.second)

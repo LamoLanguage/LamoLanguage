@@ -1,0 +1,2 @@
+// ERRO: literal de struct desconhecido
+let p = Unknown { x: 1 };

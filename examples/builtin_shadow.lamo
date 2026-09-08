@@ -1,0 +1,7 @@
+// Builtins são identificadores — `let abs = 5;` é válido
+let abs = 5;
+fn myprint(x) {
+    return x;
+}
+print(myprint(42));
+print(abs);

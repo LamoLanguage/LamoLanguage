@@ -1,0 +1,4 @@
+// Sprint 4: must fail check — using `alias.fn(args)` without ever
+// importing anything under that alias. The semantic pass should report
+// that the alias was not imported.
+print(nomod.square(5));

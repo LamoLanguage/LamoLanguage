@@ -1,0 +1,22 @@
+// Sprint 3: optional type annotations on let declarations.
+// These should all compile and run identically to untyped code.
+let x: int = 5;
+let y: string = "hello";
+let z: float = 3.14;
+let w: bool = true;
+print(x);
+print(y);
+print(z);
+print(w);
+
+// Function with typed params and return type.
+fn add(a: int, b: int) -> int {
+    return a + b;
+}
+print(add(3, 4));
+
+// Function with mixed annotations (some params typed, some not).
+fn greet(name: string, n) {
+    return name + n;
+}
+print(greet("count: ", 42));

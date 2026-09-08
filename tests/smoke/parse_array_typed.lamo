@@ -1,0 +1,4 @@
+let xs: array<int> = [1, 2, 3];
+print(xs.len());
+let ys: array<string> = ["a", "b"];
+print(ys[0]);

@@ -1,0 +1,2 @@
+fn f(x: Missing1) -> int { return x; }
+f(1);

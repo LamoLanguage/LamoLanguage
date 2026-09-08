@@ -1,0 +1,68 @@
+import std.testing as testing
+import std.math as math
+
+testing.begin("math.sqrt of 16")
+testing.assertEqual(math.sqrt(16), 4)
+testing.end()
+
+testing.begin("math.pow of 2^10")
+testing.assertEqual(math.pow(2, 10), 1024)
+testing.end()
+
+testing.begin("math.floor")
+testing.assertEqual(math.floor(3.7), 3)
+testing.end()
+
+testing.begin("math.ceil")
+testing.assertEqual(math.ceil(3.2), 4)
+testing.end()
+
+testing.begin("math.round half up")
+testing.assertEqual(math.round(3.5), 4)
+testing.end()
+
+testing.begin("math.min")
+testing.assertEqual(math.min(3, 7), 3)
+testing.end()
+
+testing.begin("math.max")
+testing.assertEqual(math.max(3, 7), 7)
+testing.end()
+
+testing.begin("math.clamp above range")
+testing.assertEqual(math.clamp(15, 0, 10), 10)
+testing.end()
+
+testing.begin("math.clamp below range")
+testing.assertEqual(math.clamp(-5, 0, 10), 0)
+testing.end()
+
+testing.begin("math.abs of negative")
+testing.assertEqual(math.abs(-5), 5)
+testing.end()
+
+testing.begin("math.factorial of 5")
+testing.assertEqual(math.factorial(5), 120)
+testing.end()
+
+testing.begin("math.gcd of 12 and 18")
+testing.assertEqual(math.gcd(12, 18), 6)
+testing.end()
+
+testing.begin("math.sum of array")
+testing.assertEqual(math.sum([1, 2, 3, 4, 5]), 15)
+testing.end()
+
+testing.begin("math.avg of array")
+testing.assertEqual(math.avg([2, 4, 6]), 4)
+testing.end()
+
+testing.begin("math.toDegrees of PI")
+testing.assertEqual(math.toDegrees(math.PI), 180)
+testing.end()
+
+testing.begin("math.toRadians of 180")
+testing.assertEqual(math.toRadians(180), math.PI)
+testing.end()
+
+testing.summary()

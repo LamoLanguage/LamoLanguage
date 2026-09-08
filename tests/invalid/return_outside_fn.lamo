@@ -1,0 +1,2 @@
+// ERRO: return fora de funcao
+return 42;

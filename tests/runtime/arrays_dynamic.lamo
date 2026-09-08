@@ -1,0 +1,22 @@
+// Sprint 3: arrays with mixed-type elements and nested access.
+let mixed = [1, "hello", true, 3.14];
+print(mixed[0]);
+print(mixed[1]);
+print(mixed[2]);
+print(mixed[3]);
+print(mixed.len);
+
+// Build an array dynamically with push.
+let dyn = [];
+for (let i = 0; i < 5; i++) {
+    push(dyn, i * i);
+}
+print(dyn.len);
+print(dyn[4]);
+
+// Pop elements off in a loop.
+let s = [1, 2, 3, 4, 5];
+while (s.len > 0) {
+    print(pop(s));
+}
+print(s.len);

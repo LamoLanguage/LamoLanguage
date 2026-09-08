@@ -1,0 +1,104 @@
+// Phase 2 example: structs, methods, arrays, enums, match
+// A small RPG-style demo using all Phase 2 features.
+
+struct Player {
+    name: string,
+    hp: int,
+    max_hp: int,
+    level: int
+}
+
+impl Player {
+    fn damage(amount: int) {
+        self.hp -= amount
+        if (self.hp < 0) {
+            self.hp = 0
+        }
+    }
+
+    fn heal(amount: int) {
+        self.hp += amount
+        if (self.hp > self.max_hp) {
+            self.hp = self.max_hp
+        }
+    }
+
+    fn is_alive() {
+        return self.hp > 0
+    }
+
+    fn level_up() {
+        self.level += 1
+        self.max_hp += 10
+        self.hp = self.max_hp
+    }
+
+    fn status() {
+        return self.name + " Lv" + self.level + " HP:" + self.hp + "/" + self.max_hp
+    }
+}
+
+enum Action {
+    Attack,
+    Heal,
+    Flee
+}
+
+fn resolve_action(actor: Player, action: int, target: Player) {
+    match action {
+        Attack => {
+            target.damage(15)
+            print(actor.name + " attacks " + target.name + " for 15 damage")
+        },
+        Heal => {
+            actor.heal(20)
+            print(actor.name + " heals for 20 HP")
+        },
+        Flee => {
+            print(actor.name + " flees the battle")
+        },
+        _ => {
+            print("unknown action")
+        }
+    }
+}
+
+let hero = Player { name: "Hero", hp: 50, max_hp: 50, level: 1 };
+let goblin = Player { name: "Goblin", hp: 30, max_hp: 30, level: 1 };
+
+print(hero.status());
+print(goblin.status());
+
+// Hero attacks goblin
+resolve_action(hero, Attack, goblin);
+print(goblin.status());
+
+// Goblin attacks hero
+resolve_action(goblin, Attack, hero);
+print(hero.status());
+
+// Hero heals
+resolve_action(hero, Heal, goblin);
+print(hero.status());
+
+// Hero levels up
+hero.level_up();
+print(hero.status());
+
+// Goblin flees
+resolve_action(goblin, Flee, hero);
+
+// Inventory as an array of strings
+let inventory = ["sword", "shield", "potion"];
+print("Inventory:");
+for (let i = 0; i < inventory.len(); i++) {
+    print("  - " + inventory[i])
+}
+
+inventory.push("key");
+print("After picking up key: " + inventory.len() + " items")
+
+// Check if hero is alive
+if (hero.is_alive()) {
+    print(hero.name + " is still standing")
+}

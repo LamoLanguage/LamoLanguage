@@ -1,0 +1,13 @@
+// Globals acessiveis dentro de funcoes
+let counter = 100;
+
+fn getCounter() {
+    return counter;
+}
+
+fn addToCounter(x) {
+    return counter + x;
+}
+
+print(getCounter());
+print(addToCounter(50));

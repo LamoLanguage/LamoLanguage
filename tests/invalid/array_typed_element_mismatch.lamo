@@ -1,0 +1,10 @@
+fn total(xs: array<int>) -> int {
+    let i = 0;
+    let acc = 0;
+    while (i < xs.len()) {
+        acc = acc + xs[i];
+        i = i + 1;
+    }
+    return acc;
+}
+total([1, 2, "three"]);

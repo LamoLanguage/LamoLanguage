@@ -1,0 +1,26 @@
+import std.json as json
+import std.io as io
+
+// Parse a simple JSON object
+let text = "{\"name\":\"lamo\",\"version\":1,\"active\":true}"
+let parsed = json.parse(text)
+
+// Note: JSON objects are returned as JsonObject structs.
+// Direct member access on module-returned structs is limited (see
+// std/collections.lamo for the same constraint), so we use the
+// helper functions json.getString / json.getInt below.
+io.println("name = " + json.getString(parsed, "name"))
+io.println("version = " + json.getInt(parsed, "version"))
+io.println("active = " + json.getInt(parsed, "active"))
+
+// Stringify a value back to JSON
+io.println("stringify string: " + json.stringify("hello"))
+io.println("stringify int: " + json.stringify(42))
+io.println("stringify array: " + json.stringify([1, 2, 3]))
+
+// Parse an array
+let arrText = "[1, 2, 3, 4, 5]"
+let arr = json.parse(arrText)
+io.println("array len = " + arr.len())
+io.println("array[0] = " + arr[0])
+io.println("array[4] = " + arr[4])

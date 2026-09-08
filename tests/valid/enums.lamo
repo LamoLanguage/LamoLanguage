@@ -1,0 +1,31 @@
+// Enums: declaration, variant access, comparison
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+let c = Red;
+print(c);
+
+let g = Green;
+print(g);
+
+let b = Blue;
+print(b);
+
+// Comparison
+print(c == Red);
+print(c == Green);
+print(c != Blue);
+
+// Use in if
+if (c == Red) {
+    print("is red")
+}
+
+if (c != Red) {
+    print("not red")
+} else {
+    print("is red (else)")
+}

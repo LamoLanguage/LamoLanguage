@@ -1,0 +1,30 @@
+// Arrays: literals, indexing, push, len, pop, index assignment
+let numbers = [1, 2, 3];
+print(numbers.len());
+
+numbers.push(4);
+print(numbers.len());
+
+print(numbers[0]);
+print(numbers[3]);
+
+numbers[0] = 99;
+print(numbers[0]);
+
+let last = numbers.pop();
+print(last);
+print(numbers.len());
+
+let empty = [];
+print(empty.len());
+
+empty.push(42);
+print(empty.len());
+print(empty[0]);
+
+// Iteration over array
+let sum = 0;
+for (let i = 0; i < numbers.len(); i++) {
+    sum += numbers[i]
+}
+print(sum);

@@ -1,0 +1,4 @@
+// Runtime: esperado 0 10 20 cada um em linha
+for (let j = 0; j < 3; j = j + 1) {
+    print(j * 10);
+}

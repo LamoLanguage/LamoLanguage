@@ -1,0 +1,8 @@
+// ERRO: atribuicao a campo inexistente em struct
+struct Point {
+    x: int,
+    y: int
+}
+
+let p = Point { x: 1, y: 2 };
+p.z = 3;

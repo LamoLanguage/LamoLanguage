@@ -1,0 +1,15 @@
+// Arquivo com 3 erros sintáticos — antes o parser parava no primeiro.
+let x = 10
+print(x);
+
+let y = ;
+
+fn bad(
+    return 1;
+}
+
+fn good() {
+    return 42;
+}
+
+print(good());

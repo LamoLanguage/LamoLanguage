@@ -1,0 +1,35 @@
+// Structs with methods (impl blocks)
+struct Counter {
+    count: int,
+    step: int
+}
+
+impl Counter {
+    fn increment() {
+        self.count += self.step
+    }
+    fn reset() {
+        self.count = 0
+    }
+    fn set_step(new_step: int) {
+        self.step = new_step
+    }
+    fn value() {
+        return self.count
+    }
+}
+
+let c = Counter { count: 0, step: 1 };
+print(c.value());
+
+c.increment();
+c.increment();
+c.increment();
+print(c.value());
+
+c.set_step(5);
+c.increment();
+print(c.value());
+
+c.reset();
+print(c.value());

@@ -1,0 +1,6 @@
+struct Holder<T> {
+    inner: array<Mystery>,
+    count: int
+}
+let h = Holder<int> { inner: [], count: 0 };
+print(h.count);

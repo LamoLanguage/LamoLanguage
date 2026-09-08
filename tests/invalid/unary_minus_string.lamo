@@ -1,0 +1,3 @@
+// ERRO: unario menos em string
+let s = "abc";
+print(-s);

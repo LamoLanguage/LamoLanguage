@@ -1,0 +1,8 @@
+// math.lamo — module imported via bare identifier in tests.
+fn square(n) {
+    return n * n
+}
+
+fn add(a, b) {
+    return a + b
+}

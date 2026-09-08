@@ -1,0 +1,14 @@
+// Funcoes, recursao, escopo
+fn add(a, b) {
+    return a + b;
+}
+
+fn fib(n) {
+    if (n <= 1) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+print(add(3, 4));
+print(fib(10));

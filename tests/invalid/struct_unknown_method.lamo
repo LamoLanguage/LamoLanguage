@@ -1,0 +1,13 @@
+// ERRO: chamada de metodo inexistente em struct
+struct Player {
+    hp: int
+}
+
+impl Player {
+    fn heal(amount: int) {
+        self.hp += amount
+    }
+}
+
+let p = Player { hp: 10 };
+p.attack(5);

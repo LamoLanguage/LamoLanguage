@@ -1,0 +1,45 @@
+// Generics PRs 2-6: language-level acceptance suite.
+struct Box<T> { items: array<T>, tag: int }
+
+impl<T> Box<T> {
+    fn add(x: T) -> int {
+        self.items.push(x);
+        self.tag = self.tag + 1;
+        return self.tag;
+    }
+    fn total() -> T {
+        let i = 0;
+        let acc = self.items[0];
+        while (i < self.items.len()) {
+            i = i + 1;
+        }
+        return acc;
+    }
+}
+
+fn pick<T>(a: T, b: T) -> T {
+    if (1 < 2) { return a; }
+    return b;
+}
+
+fn bigger<A: Ord>(x: A, y: A) -> A {
+    if (y > x) { return y; }
+    return x;
+}
+
+fn show_any<Z>(z: Z) -> int {
+    print(z);
+    return 0;
+}
+
+let b: Box<int> = Box<int> { items: [], tag: 0 };
+b.add(5);
+b.add(9);
+print(b.items);
+print(b.tag);
+print(pick("left", "right"));
+print(bigger(3, 11));
+show_any(true);
+show_any(2.5);
+let n = pick<int>(7, 8);
+print(n);

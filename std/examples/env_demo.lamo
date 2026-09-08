@@ -1,0 +1,13 @@
+import std.env as env
+import std.io as io
+
+io.println("PATH = " + env.get("PATH"))
+io.println("HOME = " + env.get("HOME"))
+io.println("PATH has = " + env.has("PATH"))
+io.println("MISSING has = " + env.has("DEFINITELY_NOT_SET_VAR_XYZ"))
+io.println("getOr = " + env.getOr("MISSING", "default-value"))
+
+env.set("LAMO_DEMO_VAR", "hello-from-lamo")
+io.println("after set = " + env.get("LAMO_DEMO_VAR"))
+env.remove("LAMO_DEMO_VAR")
+io.println("after remove = " + env.has("LAMO_DEMO_VAR"))

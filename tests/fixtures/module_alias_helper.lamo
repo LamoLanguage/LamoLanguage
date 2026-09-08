@@ -1,0 +1,15 @@
+// Sprint 4: helper module for the module_alias runtime test.
+// Defines functions that the main test file imports with `as math;`
+// and calls via the namespaced syntax `math.square(x)` etc.
+
+fn square(n) {
+    return n * n;
+}
+
+fn add(a, b) {
+    return a + b;
+}
+
+fn greet(name) {
+    return "hi " + name;
+}

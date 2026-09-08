@@ -1,0 +1,5 @@
+// Sprint 4: must fail check — module member called with the wrong
+// number of arguments. `square` expects 1, the call passes 3.
+import "../fixtures/module_alias_helper.lamo" as math;
+
+print(math.square(1, 2, 3));

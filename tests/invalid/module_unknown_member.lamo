@@ -1,0 +1,5 @@
+// Sprint 4: must fail check — module alias used with a member name that
+// does not exist in the imported file.
+import "../fixtures/module_alias_helper.lamo" as math;
+
+print(math.unknown_function(5));

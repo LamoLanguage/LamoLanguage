@@ -1,0 +1,2 @@
+import "fixtures/broken_helper.lamo";
+print(fine(2));

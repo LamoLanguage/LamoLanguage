@@ -1,0 +1,24 @@
+import std.testing as testing
+import std.io as io
+
+testing.begin("io.print returns 0")
+testing.assertEqual(io.print("hello"), 0)
+testing.end()
+
+testing.begin("io.println returns 0")
+testing.assertEqual(io.println("world"), 0)
+testing.end()
+
+testing.begin("io.write returns 0")
+testing.assertEqual(io.write("no newline"), 0)
+testing.end()
+
+testing.begin("io.eprint returns 0")
+testing.assertEqual(io.eprint("err msg"), 0)
+testing.end()
+
+testing.begin("io.println of integer")
+testing.assertEqual(io.println(42), 0)
+testing.end()
+
+testing.summary()

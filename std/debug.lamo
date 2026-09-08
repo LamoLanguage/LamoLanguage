@@ -1,0 +1,83 @@
+// std.debug — Development and debugging utilities.
+//
+// Part of the Lamo standard library. Provides lightweight tools for
+// ad-hoc debugging: log/dump for inspecting values, and time/trace
+// for simple profiling.
+//
+// All output goes to stderr so it doesn't interfere with stdout-based
+// pipelines.
+//
+// Usage:
+//   import std.debug as debug
+//   debug.log("reached point A")
+//   debug.dump(myValue)
+//   debug.time("myloop")
+//   // ... do work ...
+//   debug.timeEnd("myloop")
+
+// log(message) — print a debug message to stderr with a "debug: " prefix.
+fn log(message) {
+    __lamo_std_io_eprint("debug: " + message)
+    return 0
+}
+
+// dump(value) — print a value to stderr for inspection.
+fn dump(value) {
+    __lamo_std_io_eprint("dump: ")
+    __lamo_std_io_eprint(value + "")
+    return 0
+}
+
+// Internal timer table (two parallel arrays: labels and start times).
+let _timer_labels = []
+let _timer_starts = []
+
+// time(label) — start a named timer. Use timeEnd(label) to stop and
+// print the elapsed milliseconds.
+fn time(label) {
+    push(_timer_labels, label)
+    push(_timer_starts, __lamo_std_time_monotonic())
+    return 0
+}
+
+// timeEnd(label) — stop a named timer and print the elapsed time.
+fn timeEnd(label) {
+    let i = 0
+    while (i < _timer_labels.len()) {
+        if (_timer_labels[i] == label) {
+            let elapsed = __lamo_std_time_monotonic() - _timer_starts[i]
+            __lamo_std_io_eprint(label + ": " + elapsed + "ms")
+            // Remove this entry
+            let j = i
+            let n = _timer_labels.len()
+            while (j < n - 1) {
+                _timer_labels[j] = _timer_labels[j + 1]
+                _timer_starts[j] = _timer_starts[j + 1]
+                j = j + 1
+            }
+            pop(_timer_labels)
+            pop(_timer_starts)
+            return elapsed
+        }
+        i = i + 1
+    }
+    __lamo_std_io_eprint("timeEnd: no such label: " + label)
+    return 0
+}
+
+// trace(message) — print a stack-trace-style line: filename:line is not
+// available in pure Lamo, so we just prefix with "trace: " for now.
+fn trace(message) {
+    __lamo_std_io_eprint("trace: " + message)
+    return 0
+}
+
+// assert(condition, message) — like testing.assert, but with a message
+// and immediate exit on failure. Useful for invariant checks in
+// non-test code.
+fn assert(condition, message) {
+    if (condition) { return 0 }
+    __lamo_std_io_eprint("assertion failed: " + message)
+    __lamo_std_process_exit(1)
+    return 0
+}

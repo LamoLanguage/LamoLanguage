@@ -1,0 +1,6 @@
+fn nothere() -> void {
+    print("!");
+}
+if (true || nothere()) {
+    print("x");
+}

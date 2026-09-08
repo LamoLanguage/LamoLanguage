@@ -1,0 +1,3 @@
+fn boom() -> void { print("!"); }
+let t = true;
+if (t && boom()) { print(1); }

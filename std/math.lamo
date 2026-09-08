@@ -1,0 +1,128 @@
+// std.math — Math functions and constants.
+//
+// Part of the Lamo standard library. Wraps the C-level math builtins
+// and exposes a small set of mathematical constants. All trigonometric
+// functions work in radians.
+//
+// Constants:
+//   PI  — π ≈ 3.141592653589793
+//   E   — Euler's number ≈ 2.718281828459045
+//   TAU — 2π ≈ 6.283185307179586
+//
+// Usage:
+//   import std.math as math
+//   math.sqrt(16)            // 4
+//   math.pow(2, 10)          // 1024
+//   math.sin(math.PI / 2)    // 1
+
+// Constants
+let PI = 3.141592653589793
+let E = 2.718281828459045
+let TAU = 6.283185307179586
+
+fn sqrt(x) {
+    return __lamo_std_math_sqrt(x)
+}
+
+fn pow(base, exp) {
+    return __lamo_std_math_pow(base, exp)
+}
+
+fn sin(x) {
+    return __lamo_std_math_sin(x)
+}
+
+fn cos(x) {
+    return __lamo_std_math_cos(x)
+}
+
+fn tan(x) {
+    return __lamo_std_math_tan(x)
+}
+
+fn floor(x) {
+    return __lamo_std_math_floor(x)
+}
+
+fn ceil(x) {
+    return __lamo_std_math_ceil(x)
+}
+
+fn round(x) {
+    return __lamo_std_math_round(x)
+}
+
+fn min(a, b) {
+    return __lamo_std_math_min(a, b)
+}
+
+fn max(a, b) {
+    return __lamo_std_math_max(a, b)
+}
+
+fn clamp(v, lo, hi) {
+    return __lamo_std_math_clamp(v, lo, hi)
+}
+
+// abs(x) — absolute value. Lamo's builtin `abs` works on both int and
+// float, so we just delegate to it. (Note: we cannot call abs() directly
+// here because that would recurse into our own function — the builtin
+// resolves by name at the call site. Instead, we redefine abs in terms
+// of math operations.)
+fn abs(x) {
+    if (x < 0) { return -x }
+    return x
+}
+
+// sum(arr) — sum all numeric elements of an array.
+fn sum(arr) {
+    let total = 0
+    let i = 0
+    while (i < arr.len()) {
+        total = total + arr[i]
+        i = i + 1
+    }
+    return total
+}
+
+// avg(arr) — arithmetic mean of an array. Returns 0 for empty arrays.
+fn avg(arr) {
+    let n = arr.len()
+    if (n == 0) { return 0 }
+    return sum(arr) / n
+}
+
+// gcd(a, b) — greatest common divisor of two non-negative integers
+// using the Euclidean algorithm.
+fn gcd(a, b) {
+    if (a < 0) { a = -a }
+    if (b < 0) { b = -b }
+    while (b != 0) {
+        let t = b
+        b = a % b
+        a = t
+    }
+    return a
+}
+
+// factorial(n) — n! for non-negative integers.
+fn factorial(n) {
+    if (n < 0) { return 0 }
+    let result = 1
+    let i = 2
+    while (i <= n) {
+        result = result * i
+        i = i + 1
+    }
+    return result
+}
+
+// toRadians(deg) — convert degrees to radians.
+fn toRadians(deg) {
+    return deg * PI / 180.0
+}
+
+// toDegrees(rad) — convert radians to degrees.
+fn toDegrees(rad) {
+    return rad * 180.0 / PI
+}

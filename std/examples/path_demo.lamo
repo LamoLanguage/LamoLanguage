@@ -1,0 +1,17 @@
+import std.path as path
+import std.io as io
+
+io.println("join: " + path.join("a", "b/c"))
+io.println("join: " + path.join("/root", "file.txt"))
+io.println("parent: " + path.parent("/x/y/z.txt"))
+io.println("dirname: " + path.dirname("/x/y/z.txt"))
+io.println("filename: " + path.filename("/x/y/z.txt"))
+io.println("basename: " + path.basename("/x/y/z.txt"))
+io.println("extension: " + path.extension("/x/y/z.txt"))
+io.println("stem: " + path.stem("/x/y/z.txt"))
+io.println("hasExtension: " + path.hasExtension("/x/y/z.txt"))
+io.println("hasExtension (no ext): " + path.hasExtension("/x/y/z"))
+io.println("absolute: " + path.absolute("test.txt"))
+io.println("normalize: " + path.normalize("/a/b/../c/./d"))
+io.println("normalize: " + path.normalize("a/./b//c"))
+io.println("separator: " + path.separator())

@@ -1,0 +1,4 @@
+fn f<T: TotallyFake>(x: T) -> T {
+    return x;
+}
+f(1);

@@ -1,0 +1,60 @@
+// Generics PR 4 + PR 5: typed collections and Option/Result.
+import std.testing as testing
+import std.collections as collections
+
+testing.begin("typedListNew + typedListPush keep element typing")
+let xs = collections.typedListNew()
+collections.typedListPush(xs, 10)
+collections.typedListPush(xs, 20)
+testing.assertEqual(collections.typedListLen(xs), 2)
+testing.assertEqual(collections.typedListGet(xs, 0), 10)
+testing.end()
+
+testing.begin("typedListPop is LIFO")
+testing.assertEqual(collections.typedListPop(xs), 20)
+testing.assertEqual(collections.typedListLen(xs), 1)
+testing.end()
+
+testing.begin("typedMap has/getOr/len")
+let m = collections.typedMapNew()
+testing.assertEqual(collections.typedMapLen(m), 0)
+testing.assertFalse(collections.typedMapHas(m, "a"))
+testing.assertEqual(collections.typedMapGetOr(m, "a", "dflt"), "dflt")
+testing.end()
+
+testing.begin("typedSetAdd dedupes via Eq constraint")
+let s = collections.typedSetNew()
+testing.assertTrue(collections.typedSetAdd(s, 1))
+testing.assertFalse(collections.typedSetAdd(s, 1))
+testing.assertTrue(collections.typedSetAdd(s, 2))
+testing.assertTrue(collections.typedSetHas(s, 2))
+testing.end()
+
+testing.begin("optionSome carries the value")
+let o = collections.optionSome(42)
+testing.assertTrue(collections.optionIsSome(o))
+testing.assertEqual(collections.optionUnwrapOr(o, -1), 42)
+testing.end()
+
+testing.begin("optionNone falls back")
+let n = collections.optionNone()
+testing.assertFalse(collections.optionIsSome(n))
+testing.assertEqual(collections.optionUnwrapOr(n, "fallback"), "fallback")
+testing.end()
+
+testing.begin("typed Option payloads are checked at factories")
+let checked = collections.optionSome("strings work")
+testing.assertTrue(collections.optionIsSome(checked))
+testing.assertEqual(collections.optionUnwrapOr(checked, "dflt"), "strings work")
+testing.end()
+
+testing.begin("resultOk / resultErr / resultUnwrapOr")
+let ok = collections.resultOk(7)
+let err = collections.resultErr("disk full")
+testing.assertTrue(collections.resultIsOk(ok))
+testing.assertFalse(collections.resultIsOk(err))
+testing.assertEqual(collections.resultUnwrapOr(err, -5), -5)
+testing.assertEqual(collections.resultUnwrapOr(ok, -5), 7)
+testing.end()
+
+testing.summary()

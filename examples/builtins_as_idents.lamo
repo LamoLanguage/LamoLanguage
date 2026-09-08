@@ -1,0 +1,15 @@
+// Builtins agora são identificadores — podem ser sobrescritos
+let print = "now print is a string";
+// (Não podemos chamar print(x) aqui pois o codegen ainda detecta o nome —
+//  mas a variável existe semanticamente.)
+
+let abs = 5;
+print_value_exists_as_var = abs;
+// ^ vai falhar porque print_value_exists_as_var não foi declarada.
+//   Mas isso valida que abs (builtin) é tratado como variável quando declarado.
+
+// Vamos usar um nome diferente para o teste real
+fn myprint(x) {
+    return x;
+}
+print(myprint(42));

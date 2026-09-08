@@ -1,0 +1,3 @@
+fn fine(a: int) -> int {
+    return a * bogus_name;
+}

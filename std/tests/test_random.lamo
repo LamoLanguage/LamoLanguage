@@ -1,0 +1,65 @@
+import std.testing as testing
+import std.random as random
+
+testing.begin("random.int is within inclusive range")
+random.seed(42)
+let i = random.int(5, 10)
+testing.assertTrue(i >= 5)
+testing.assertTrue(i <= 10)
+testing.end()
+
+testing.begin("random.range excludes hi")
+random.seed(42)
+let r = random.range(0, 5)
+testing.assertTrue(r >= 0)
+testing.assertTrue(r < 5)
+testing.end()
+
+testing.begin("random.float in [0.0, 1.0)")
+random.seed(42)
+let f = random.float()
+testing.assertTrue(f >= 0.0)
+testing.assertTrue(f < 1.0)
+testing.end()
+
+testing.begin("random.floatRange in [lo, hi)")
+random.seed(42)
+let fr = random.floatRange(10.0, 20.0)
+testing.assertTrue(fr >= 10.0)
+testing.assertTrue(fr < 20.0)
+testing.end()
+
+testing.begin("random.bool is 0 or 1")
+random.seed(42)
+let b = random.bool()
+testing.assertTrue(b == 0 || b == 1)
+testing.end()
+
+testing.begin("random.choice picks from array")
+random.seed(42)
+let pick = random.choice([10, 20, 30])
+testing.assertTrue(pick == 10 || pick == 20 || pick == 30)
+testing.end()
+
+testing.begin("random.shuffle preserves length")
+random.seed(42)
+let arr = [1, 2, 3, 4, 5]
+random.shuffle(arr)
+testing.assertEqual(arr.len(), 5)
+testing.end()
+
+testing.begin("random.sample returns k elements")
+random.seed(42)
+let s = random.sample([1, 2, 3, 4, 5, 6], 3)
+testing.assertEqual(s.len(), 3)
+testing.end()
+
+testing.begin("random.seed is deterministic")
+random.seed(7)
+let seed1 = random.int(0, 1000)
+random.seed(7)
+let seed2 = random.int(0, 1000)
+testing.assertEqual(seed1, seed2)
+testing.end()
+
+testing.summary()

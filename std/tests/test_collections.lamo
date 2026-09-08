@@ -1,0 +1,91 @@
+import std.testing as testing
+import std.collections as collections
+
+testing.begin("list push and len")
+let list = collections.newList()
+collections.listPush(list, 10)
+collections.listPush(list, 20)
+testing.assertEqual(collections.listLen(list), 2)
+testing.end()
+
+testing.begin("list get by index")
+testing.assertEqual(collections.listGet(list, 0), 10)
+testing.assertEqual(collections.listGet(list, 1), 20)
+testing.end()
+
+testing.begin("list set by index")
+collections.listSet(list, 0, 99)
+testing.assertEqual(collections.listGet(list, 0), 99)
+testing.end()
+
+testing.begin("list contains and indexOf")
+testing.assertEqual(collections.listContains(list, 99), 1)
+testing.assertEqual(collections.listIndexOf(list, 99), 0)
+testing.end()
+
+testing.begin("list isEmpty on new list")
+let empty = collections.newList()
+testing.assertEqual(collections.listIsEmpty(empty), 1)
+testing.end()
+
+testing.begin("stack push then pop is LIFO")
+let s = collections.newStack()
+collections.stackPush(s, "a")
+collections.stackPush(s, "b")
+collections.stackPush(s, "c")
+testing.assertEqual(collections.stackPop(s), "c")
+testing.assertEqual(collections.stackPop(s), "b")
+testing.end()
+
+testing.begin("stack peek does not remove")
+collections.stackPush(s, "z")
+testing.assertEqual(collections.stackPeek(s), "z")
+testing.assertEqual(collections.stackLen(s), 2)
+testing.end()
+
+testing.begin("queue enqueue then dequeue is FIFO")
+let q = collections.newQueue()
+collections.queueEnqueue(q, 1)
+collections.queueEnqueue(q, 2)
+collections.queueEnqueue(q, 3)
+testing.assertEqual(collections.queueDequeue(q), 1)
+testing.assertEqual(collections.queueDequeue(q), 2)
+testing.end()
+
+testing.begin("hashmap put then get")
+let m = collections.newHashMap()
+collections.mapPut(m, "name", "lamo")
+testing.assertEqual(collections.mapGet(m, "name"), "lamo")
+testing.end()
+
+testing.begin("hashmap has and missing default")
+testing.assertEqual(collections.mapHas(m, "name"), 1)
+testing.assertEqual(collections.mapGetOr(m, "missing", "default"), "default")
+testing.end()
+
+testing.begin("hashmap remove")
+collections.mapRemove(m, "name")
+testing.assertEqual(collections.mapHas(m, "name"), 0)
+testing.end()
+
+testing.begin("hashmap len counts pairs")
+collections.mapPut(m, "a", 1)
+collections.mapPut(m, "b", 2)
+testing.assertEqual(collections.mapLen(m), 2)
+testing.end()
+
+testing.begin("hashset add dedupes")
+let hset = collections.newHashSet()
+collections.setAdd(hset, "apple")
+collections.setAdd(hset, "banana")
+collections.setAdd(hset, "apple")
+testing.assertEqual(collections.setLen(hset), 2)
+testing.end()
+
+testing.begin("hashset has and remove")
+testing.assertEqual(collections.setHas(hset, "apple"), 1)
+collections.setRemove(hset, "apple")
+testing.assertEqual(collections.setHas(hset, "apple"), 0)
+testing.end()
+
+testing.summary()

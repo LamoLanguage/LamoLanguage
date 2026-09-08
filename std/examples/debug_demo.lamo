@@ -1,0 +1,18 @@
+import std.debug as debug
+import std.io as io
+
+debug.log("starting program")
+debug.dump(42)
+debug.dump("a string value")
+
+debug.time("loop")
+let sum = 0
+let i = 0
+while (i < 1000) {
+    sum = sum + i
+    i = i + 1
+}
+debug.timeEnd("loop")
+io.println("sum = " + sum)
+
+debug.trace("reached end of program")

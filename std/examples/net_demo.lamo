@@ -1,0 +1,15 @@
+import std.net as net
+import std.io as io
+
+// Note: std.net currently only supports plain HTTP (no HTTPS).
+// HTTPS support requires linking against a TLS library, which is
+// planned for a future release.
+
+io.println("Fetching http://example.com/ ...")
+let body = net.get("http://example.com/")
+io.println("Got response (length: " + isstring(body) + "):")
+io.println(body)
+
+// POST example (against httpbin.org):
+// let r = net.post("http://httpbin.org/post", "hello=world")
+// io.println(r)

@@ -1,0 +1,4 @@
+fn first<T>(xs: array<T>) -> T {
+    return xs[0];
+}
+first(5);

@@ -1,0 +1,39 @@
+// Teste de strings com escape
+print("Linha1\nLinha2");
+print("Tab\taqui");
+print("Barra invertida: \\");
+print("Aspas: \"hello\"");
+print("Hex: \x41\x42\x43");
+print("Null no meio: a\0b (deve mostrar 'a')");
+
+// Teste int64
+let big = 9223372036854775807;
+print(big);
+let hex = 0xFF;
+print(hex);
+let bin = 0b1010;
+print(bin);
+let underscores = 1_000_000;
+print(underscores);
+
+// Teste float
+let pi = 3.14159;
+print(pi);
+let half = 0.5;
+print(half);
+let sum = 1.5 + 2.5;
+print(sum);
+let int_plus_float = 10 + 0.5;
+print(int_plus_float);
+
+// Teste globals acessíveis de função
+let counter = 100;
+fn getCounter() {
+    return counter;
+}
+print(getCounter());
+
+fn addToCounter(x) {
+    return counter + x;
+}
+print(addToCounter(50));

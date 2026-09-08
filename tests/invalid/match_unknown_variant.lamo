@@ -1,0 +1,12 @@
+// ERRO: padrao de match nao é variante de enum
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+let c = Red;
+match c {
+    Red => print("red"),
+    Purple => print("purple")
+}

@@ -1,0 +1,71 @@
+// std.path — Cross-platform path manipulation.
+//
+// Part of the Lamo standard library. Provides path joining, splitting,
+// and normalization without touching the filesystem. All functions
+// work on both forward-slash (POSIX) and backslash (Windows) paths.
+//
+// Usage:
+//   import std.path as path
+//   path.join("a", "b/c")        // "a/b/c"
+//   path.parent("/x/y/z.txt")    // "/x/y"
+//   path.filename("/x/y/z.txt")  // "z.txt"
+//   path.extension("z.txt")      // ".txt"
+
+fn join(a, b) {
+    return __lamo_std_path_join(a, b)
+}
+
+fn parent(p) {
+    return __lamo_std_path_parent(p)
+}
+
+fn filename(p) {
+    return __lamo_std_path_filename(p)
+}
+
+fn extension(p) {
+    return __lamo_std_path_extension(p)
+}
+
+fn absolute(p) {
+    return __lamo_std_path_absolute(p)
+}
+
+fn normalize(p) {
+    return __lamo_std_path_normalize(p)
+}
+
+// basename(p) — alias for filename(), matching POSIX basename(3).
+fn basename(p) {
+    return __lamo_std_path_filename(p)
+}
+
+// dirname(p) — alias for parent(), matching POSIX dirname(3).
+fn dirname(p) {
+    return __lamo_std_path_parent(p)
+}
+
+// stem(p) — filename without its extension. "z.txt" -> "z".
+fn stem(p) {
+    let f = filename(p)
+    let e = extension(p)
+    let n = __lamo_std_str_length(f)
+    let elen = __lamo_std_str_length(e)
+    if (elen == 0) { return f }
+    return __lamo_std_str_substring(f, 0, n - elen)
+}
+
+// hasExtension(p) — returns 1 if the path has a non-empty extension.
+fn hasExtension(p) {
+    let e = extension(p)
+    if (e == "") { return 0 }
+    return 1
+}
+
+// separator() — the OS-native path separator ("/" on POSIX, "\\" on Windows).
+// Detected at runtime via os.name().
+fn separator() {
+    let osName = __lamo_std_os_name()
+    if (osName == "windows") { return "\\" }
+    return "/"
+}

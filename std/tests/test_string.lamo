@@ -1,0 +1,75 @@
+import std.testing as testing
+import std.string as text
+
+testing.begin("string.length of ASCII")
+testing.assertEqual(text.length("hello"), 5)
+testing.end()
+
+testing.begin("string.upper")
+testing.assertEqual(text.upper("hi"), "HI")
+testing.end()
+
+testing.begin("string.lower")
+testing.assertEqual(text.lower("HI"), "hi")
+testing.end()
+
+testing.begin("string.trim")
+testing.assertEqual(text.trim("  x  "), "x")
+testing.end()
+
+testing.begin("string.startsWith")
+testing.assertEqual(text.startsWith("hello", "he"), 1)
+testing.end()
+
+testing.begin("string.endsWith")
+testing.assertEqual(text.endsWith("hello", "lo"), 1)
+testing.end()
+
+testing.begin("string.contains")
+testing.assertEqual(text.contains("hello", "ell"), 1)
+testing.end()
+
+testing.begin("string.indexOf")
+testing.assertEqual(text.indexOf("hello", "l"), 2)
+testing.end()
+
+testing.begin("string.substring")
+testing.assertEqual(text.substring("hello", 1, 4), "ell")
+testing.end()
+
+testing.begin("string.replace")
+testing.assertEqual(text.replace("hello", "l", "L"), "heLLo")
+testing.end()
+
+testing.begin("string.charAt")
+testing.assertEqual(text.charAt("hello", 1), "e")
+testing.end()
+
+testing.begin("string.repeat")
+testing.assertEqual(text.repeat("ab", 3), "ababab")
+testing.end()
+
+testing.begin("string.slice")
+testing.assertEqual(text.slice("hello", 2), "llo")
+testing.end()
+
+testing.begin("string.isEmpty empty")
+testing.assertEqual(text.isEmpty(""), 1)
+testing.end()
+
+testing.begin("string.isEmpty non-empty")
+testing.assertEqual(text.isEmpty("x"), 0)
+testing.end()
+
+testing.begin("string.count")
+testing.assertEqual(text.count("ababab", "ab"), 3)
+testing.end()
+
+testing.begin("string.split returns array")
+let parts = text.split("a,b,c", ",")
+testing.assertEqual(parts.len(), 3)
+testing.assertEqual(parts[0], "a")
+testing.assertEqual(parts[2], "c")
+testing.end()
+
+testing.summary()

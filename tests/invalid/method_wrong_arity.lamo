@@ -1,0 +1,13 @@
+// ERRO: metodo chamado com aridade errada
+struct Player {
+    hp: int
+}
+
+impl Player {
+    fn damage(amount: int) {
+        self.hp -= amount
+    }
+}
+
+let p = Player { hp: 10 };
+p.damage();

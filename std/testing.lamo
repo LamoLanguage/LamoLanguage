@@ -1,0 +1,109 @@
+// std.testing — Official testing framework.
+//
+// Part of the Lamo standard library. Provides a tiny but complete
+// test runner with assertions.
+//
+// Lamo does not (yet) support first-class function values or anonymous
+// functions, so the API uses a "begin/end" pattern: call `begin(name)`
+// to start a test case, run your assertions, then call `end()` to
+// finish. At the end of the file, call `summary()` to print the result.
+//
+// Usage:
+//   import std.testing as testing
+//
+//   fn add(a, b) { return a + b }
+//
+//   testing.begin("add basic")
+//   testing.assertEqual(add(2, 3), 5)
+//   testing.end()
+//
+//   testing.begin("add negative")
+//   testing.assertEqual(add(-1, 1), 0)
+//   testing.end()
+//
+//   testing.summary()
+
+let _pass_count = 0
+let _fail_count = 0
+let _current_name = ""
+let _current_failed = 0
+
+// begin(name) — start a named test case.
+fn begin(name) {
+    _current_name = name
+    _current_failed = 0
+    return 0
+}
+
+// end() — finish the current test case. Increments _pass_count if no
+// assertions failed during the case, _fail_count otherwise.
+fn end() {
+    if (_current_failed == 0) {
+        _pass_count = _pass_count + 1
+        __lamo_std_io_println("  PASS: " + _current_name)
+    } else {
+        _fail_count = _fail_count + 1
+        __lamo_std_io_eprint("  FAIL: " + _current_name)
+    }
+    _current_name = ""
+    _current_failed = 0
+    return 0
+}
+
+// assert(condition) — pass silently if condition is truthy; record a
+// failure otherwise. The test continues to run (failures are accumulated).
+fn assert(condition) {
+    if (condition) { return 1 }
+    _current_failed = _current_failed + 1
+    __lamo_std_io_eprint("    assertion failed in " + _current_name)
+    return 0
+}
+
+// assertEqual(actual, expected) — pass if actual == expected.
+fn assertEqual(actual, expected) {
+    if (actual == expected) { return 1 }
+    _current_failed = _current_failed + 1
+    __lamo_std_io_eprint("    assertEqual failed in " + _current_name +
+                         " (got " + actual + ", expected " + expected + ")")
+    return 0
+}
+
+// assertTrue(value) — pass if value is truthy.
+fn assertTrue(value) {
+    return assert(value)
+}
+
+// assertFalse(value) — pass if value is falsy.
+fn assertFalse(value) {
+    if (value) {
+        _current_failed = _current_failed + 1
+        __lamo_std_io_eprint("    assertFalse failed in " + _current_name)
+        return 0
+    }
+    return 1
+}
+
+// fail(message) — always record a failure.
+fn fail(message) {
+    _current_failed = _current_failed + 1
+    __lamo_std_io_eprint("    fail in " + _current_name + ": " + message)
+    return 0
+}
+
+// summary() — print a summary of all test results. Returns 0 if all
+// passed, 1 otherwise.
+fn summary() {
+    __lamo_std_io_println("==================================")
+    __lamo_std_io_println("Tests: " + _pass_count + " passed, " + _fail_count + " failed")
+    if (_fail_count > 0) { return 1 }
+    return 0
+}
+
+// reset() — clear all counters. Useful in long-running REPL sessions.
+fn reset() {
+    _pass_count = 0
+    _fail_count = 0
+    _current_name = ""
+    _current_failed = 0
+    return 0
+}

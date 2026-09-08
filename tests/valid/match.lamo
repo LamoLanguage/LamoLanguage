@@ -1,0 +1,35 @@
+// Match: pattern matching on enums
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+let c = Green;
+
+match c {
+    Red => print("red"),
+    Green => print("green"),
+    Blue => print("blue")
+}
+
+// Match with wildcard
+let c2 = Red;
+match c2 {
+    Red => print("got red"),
+    _ => print("got something else")
+}
+
+// Match with multi-statement body
+let c3 = Blue;
+match c3 {
+    Red => {
+        print("it is red")
+    },
+    Green => {
+        print("it is green")
+    },
+    _ => {
+        print("it is something else (blue)")
+    }
+}

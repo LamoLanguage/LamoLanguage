@@ -1,0 +1,97 @@
+// std.fs — File system operations.
+//
+// Part of the Lamo standard library. Wraps the C-level fs builtins.
+// All functions are cross-platform (POSIX + Win32) and operate on
+// UTF-8 paths.
+//
+// Error handling: operations that can fail return 0 on failure and
+// 1 on success (for write/delete/mkdir/etc.) or "" (for readText).
+// This matches the "no exceptions" philosophy of the language.
+//
+// Usage:
+//   import std.fs as fs
+//   if (fs.exists("config.txt")) {
+//       let cfg = fs.readText("config.txt")
+//   }
+//   fs.writeText("log.txt", "starting up\n")
+//   let entries = fs.listFiles(".")
+
+fn exists(p) {
+    return __lamo_std_fs_exists(p)
+}
+
+fn isFile(p) {
+    return __lamo_std_fs_is_file(p)
+}
+
+fn isDir(p) {
+    return __lamo_std_fs_is_dir(p)
+}
+
+fn readText(p) {
+    return __lamo_std_fs_read_text(p)
+}
+
+fn writeText(p, content) {
+    return __lamo_std_fs_write_text(p, content)
+}
+
+fn appendText(p, content) {
+    return __lamo_std_fs_append_text(p, content)
+}
+
+fn delete(p) {
+    return __lamo_std_fs_delete(p)
+}
+
+fn createDir(p) {
+    return __lamo_std_fs_create_dir(p)
+}
+
+fn removeDir(p) {
+    return __lamo_std_fs_remove_dir(p)
+}
+
+fn copy(src, dst) {
+    return __lamo_std_fs_copy(src, dst)
+}
+
+fn move(src, dst) {
+    return __lamo_std_fs_move(src, dst)
+}
+
+fn listFiles(p) {
+    return __lamo_std_fs_list_files(p)
+}
+
+fn size(p) {
+    return __lamo_std_fs_size(p)
+}
+
+// readLines(p) — read a text file and return an array of its lines
+// (without trailing newlines). Empty file → empty array. The line
+// separator is "\n"; "\r\n" is normalized to "\n" first.
+fn readLines(p) {
+    let text = __lamo_std_fs_read_text(p)
+    let normalized = __lamo_std_str_replace(text, "\r\n", "\n")
+    return __lamo_std_str_split(normalized, "\n")
+}
+
+// writeLines(p, lines) — write an array of strings to a file, one per
+// line. Returns 1 on success, 0 on failure.
+fn writeLines(p, lines) {
+    let i = 0
+    let first = 1
+    let ok = 1
+    while (i < lines.len()) {
+        if (first == 1) {
+            ok = __lamo_std_fs_write_text(p, lines[i])
+            first = 0
+        } else {
+            __lamo_std_fs_append_text(p, "\n")
+            ok = __lamo_std_fs_append_text(p, lines[i])
+        }
+        i = i + 1
+    }
+    return ok
+}

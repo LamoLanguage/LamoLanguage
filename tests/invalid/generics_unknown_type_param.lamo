@@ -1,0 +1,7 @@
+// Generics PR 1 — invalid: type parameter used in a field type that was not
+// declared in the type parameter list. 'C' is not a type param of Pair.
+struct Pair<A, B> {
+    first: A,
+    second: B,
+    bogus: C
+}

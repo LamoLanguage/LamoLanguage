@@ -1,0 +1,43 @@
+import std.testing as testing
+import std.fs as fs
+
+let path = "/tmp/lamo_fs_test.txt"
+
+testing.begin("fs.writeText returns 1")
+testing.assertEqual(fs.writeText(path, "hello\n"), 1)
+testing.end()
+
+testing.begin("fs.exists after write")
+testing.assertEqual(fs.exists(path), 1)
+testing.end()
+
+testing.begin("fs.isFile on regular file")
+testing.assertEqual(fs.isFile(path), 1)
+testing.end()
+
+testing.begin("fs.isDir on a file is 0")
+testing.assertEqual(fs.isDir(path), 0)
+testing.end()
+
+testing.begin("fs.readText roundtrip")
+testing.assertEqual(fs.readText(path), "hello\n")
+testing.end()
+
+testing.begin("fs.size > 0")
+testing.assertTrue(fs.size(path) > 0)
+testing.end()
+
+testing.begin("fs.appendText")
+fs.appendText(path, "world\n")
+testing.assertEqual(fs.readText(path), "hello\nworld\n")
+testing.end()
+
+testing.begin("fs.delete returns 1")
+testing.assertEqual(fs.delete(path), 1)
+testing.end()
+
+testing.begin("fs.exists after delete is 0")
+testing.assertEqual(fs.exists(path), 0)
+testing.end()
+
+testing.summary()

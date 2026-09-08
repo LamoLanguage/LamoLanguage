@@ -1,0 +1,11 @@
+// ERRO: declaracao duplicada de funcao com o mesmo nome.
+// Sprint 2 fix: o semantic agora reporta a localizacao da declaracao original.
+fn f(a) {
+    return a;
+}
+
+fn f(b) {
+    return b + 1;
+}
+
+print(f(10));

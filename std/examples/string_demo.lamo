@@ -1,0 +1,23 @@
+import std.string as text
+import std.io as io
+
+let s = "  Hello, World!  "
+io.println("original: '" + s + "'")
+io.println("length: " + text.length(s))
+io.println("trim: '" + text.trim(s) + "'")
+io.println("upper: " + text.upper(s))
+io.println("lower: " + text.lower(s))
+io.println("contains 'World': " + text.contains(s, "World"))
+io.println("contains 'world': " + text.contains(s, "world"))
+io.println("startsWith '  H': " + text.startsWith(s, "  H"))
+io.println("endsWith '!'': " + text.endsWith(s, "!  "))
+io.println("indexOf ',': " + text.indexOf(s, ","))
+io.println("replace: " + text.replace(s, "World", "Lamo"))
+io.println("substring 2-7: '" + text.substring(s, 2, 7) + "'")
+
+let parts = text.split("a,b,c,d", ",")
+io.println("split: " + parts)
+io.println("split len: " + parts.len())
+
+io.println("repeat: " + text.repeat("ab", 5))
+io.println("charAt 4: '" + text.charAt(s, 4) + "'")

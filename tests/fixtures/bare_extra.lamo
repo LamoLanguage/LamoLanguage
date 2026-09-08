@@ -1,0 +1,8 @@
+// Helper module for bare-import tests (second alias).
+fn double(n) {
+    return n * 2
+}
+
+fn greet(name) {
+    return "hello " + name
+}

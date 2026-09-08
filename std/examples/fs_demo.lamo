@@ -1,0 +1,47 @@
+import std.fs as fs
+import std.io as io
+import std.path as path
+
+// Write a file
+fs.writeText("/tmp/lamo_test.txt", "line 1\nline 2\nline 3\n")
+io.println("exists: " + fs.exists("/tmp/lamo_test.txt"))
+io.println("isFile: " + fs.isFile("/tmp/lamo_test.txt"))
+io.println("isDir: " + fs.isDir("/tmp/lamo_test.txt"))
+io.println("size: " + fs.size("/tmp/lamo_test.txt"))
+
+// Read it back
+let content = fs.readText("/tmp/lamo_test.txt")
+io.println("content: " + content)
+
+// Read lines
+let lines = fs.readLines("/tmp/lamo_test.txt")
+io.println("lines len: " + lines.len())
+io.println("lines[0]: " + lines[0])
+io.println("lines[1]: " + lines[1])
+
+// Append
+fs.appendText("/tmp/lamo_test.txt", "line 4\n")
+io.println("size after append: " + fs.size("/tmp/lamo_test.txt"))
+
+// Create a directory
+fs.createDir("/tmp/lamo_test_dir")
+io.println("dir exists: " + fs.exists("/tmp/lamo_test_dir"))
+io.println("dir isDir: " + fs.isDir("/tmp/lamo_test_dir"))
+
+// List files in /tmp
+let entries = fs.listFiles("/tmp")
+io.println("entries in /tmp: " + entries.len())
+
+// Path operations
+io.println("join: " + path.join("a", "b/c"))
+io.println("parent: " + path.parent("/x/y/z.txt"))
+io.println("filename: " + path.filename("/x/y/z.txt"))
+io.println("extension: " + path.extension("/x/y/z.txt"))
+io.println("stem: " + path.stem("/x/y/z.txt"))
+io.println("absolute: " + path.absolute("test.txt"))
+io.println("normalize: " + path.normalize("/a/b/../c/./d"))
+
+// Cleanup
+fs.delete("/tmp/lamo_test.txt")
+fs.removeDir("/tmp/lamo_test_dir")
+io.println("after cleanup, exists: " + fs.exists("/tmp/lamo_test.txt"))

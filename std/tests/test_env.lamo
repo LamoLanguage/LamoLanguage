@@ -1,0 +1,30 @@
+import std.testing as testing
+import std.env as env
+
+testing.begin("env.set then get")
+env.set("LAMO_DOC_TEST", "hello123")
+testing.assertEqual(env.get("LAMO_DOC_TEST"), "hello123")
+testing.end()
+
+testing.begin("env.has after set")
+testing.assertEqual(env.has("LAMO_DOC_TEST"), 1)
+testing.end()
+
+testing.begin("env.has for missing var")
+testing.assertEqual(env.has("LAMO_NO_SUCH_VAR_XYZ"), 0)
+testing.end()
+
+testing.begin("env.getOr returns set value")
+testing.assertEqual(env.getOr("LAMO_DOC_TEST", "fallback"), "hello123")
+testing.end()
+
+testing.begin("env.getOr returns default when missing")
+testing.assertEqual(env.getOr("LAMO_NO_SUCH_VAR_XYZ", "fallback"), "fallback")
+testing.end()
+
+testing.begin("env.remove unsets the variable")
+env.remove("LAMO_DOC_TEST")
+testing.assertEqual(env.has("LAMO_DOC_TEST"), 0)
+testing.end()
+
+testing.summary()

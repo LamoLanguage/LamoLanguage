@@ -1,0 +1,76 @@
+// std.random — Random number generation.
+//
+// Part of the Lamo standard library. Provides a simple xorshift64*-based
+// PRNG. NOT cryptographically secure — use it for games, simulations,
+// and testing only. The generator is seeded automatically on first use
+// with time + pid, but you can re-seed deterministically with seed().
+//
+// Usage:
+//   import std.random as random
+//   random.seed(42)
+//   let x = random.int(1, 100)        // 1..100 inclusive
+//   let f = random.float()            // [0.0, 1.0)
+//   let b = random.bool()             // 0 or 1
+//   let pick = random.choice([1, 2, 3])
+
+fn seed(s) {
+    return __lamo_std_random_seed(s)
+}
+
+// int(lo, hi) — random integer in [lo, hi] (inclusive on both ends).
+fn int(lo, hi) {
+    return __lamo_std_random_int(lo, hi)
+}
+
+// float() — random float in [0.0, 1.0).
+fn float() {
+    return __lamo_std_random_float()
+}
+
+// bool() — random boolean (0 or 1).
+fn bool() {
+    return __lamo_std_random_bool()
+}
+
+// choice(arr) — random element from a non-empty array.
+// Aborts with a runtime error if the array is empty.
+fn choice(arr) {
+    return __lamo_std_random_choice(arr)
+}
+
+// shuffle(arr) — Fisher-Yates shuffle of `arr`, in place. Returns
+// the same array reference for chaining.
+fn shuffle(arr) {
+    return __lamo_std_random_shuffle(arr)
+}
+
+// range(lo, hi) — random integer in [lo, hi). Same as int(lo, hi-1).
+fn range(lo, hi) {
+    return __lamo_std_random_int(lo, hi - 1)
+}
+
+// floatRange(lo, hi) — random float in [lo, hi).
+fn floatRange(lo, hi) {
+    return lo + __lamo_std_random_float() * (hi - lo)
+}
+
+// sample(arr, k) — return a new array of k random distinct elements
+// from arr (without replacement). If k >= arr.len(), returns a shuffled
+// copy of arr.
+fn sample(arr, k) {
+    let copy = []
+    let i = 0
+    while (i < arr.len()) {
+        push(copy, arr[i])
+        i = i + 1
+    }
+    __lamo_std_random_shuffle(copy)
+    if (k >= copy.len()) { return copy }
+    let result = []
+    let j = 0
+    while (j < k) {
+        push(result, copy[j])
+        j = j + 1
+    }
+    return result
+}

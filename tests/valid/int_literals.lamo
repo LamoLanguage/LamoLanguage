@@ -1,0 +1,9 @@
+// Literais inteiros: hex, binario, underscores, int64
+let hex = 0xFF;
+let bin = 0b1010;
+let big = 1_000_000;
+let max64 = 9223372036854775807;
+print(hex);
+print(bin);
+print(big);
+print(max64);

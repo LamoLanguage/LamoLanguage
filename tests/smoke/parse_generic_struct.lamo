@@ -1,0 +1,7 @@
+struct Pair<A, B> { first: A, second: B }
+impl<T> Stack<T> {
+    fn ok() -> bool { return true; }
+}
+struct Stack<T> { items: array<T>, top: int }
+let p = Pair<int, string> { first: 1, second: "s" };
+print(p.first);

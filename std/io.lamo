@@ -1,0 +1,61 @@
+// std.io — Input and output utilities.
+//
+// Part of the Lamo standard library. Re-exports the language's core I/O
+// builtins (print, input) and adds convenience helpers for line-based
+// reading, error-stream printing, and no-newline writes.
+//
+// All output is UTF-8 on stdout/stderr. Multiplatform.
+//
+// Usage:
+//   import std.io            // alias `io` (default: last segment)
+//   io.println("hello")
+//   io.eprint("warning")
+//   let line = io.readLine()
+
+// print(value) — print with a trailing newline. Returns 0.
+fn print(value) {
+    return __lamo_std_io_println(value)
+}
+
+// println(value) — same as print(); provided for naming consistency
+// with other languages and the user-facing API spec.
+fn println(value) {
+    return __lamo_std_io_println(value)
+}
+
+// eprint(value) — print to stderr with a trailing newline.
+fn eprint(value) {
+    return __lamo_std_io_eprint(value)
+}
+
+// write(value) — print without a trailing newline. Useful for prompts
+// and inline progress output.
+fn write(value) {
+    return __lamo_std_io_write(value)
+}
+
+// readLine() — read one line of text from stdin (without the trailing
+// newline). Returns "" on EOF.
+fn readLine() {
+    return __lamo_std_io_read_line()
+}
+
+// input(prompt) — print the prompt (no newline), then read one line
+// from stdin. Returns the line as a string (without trailing newline).
+// This complements the language-level `input(prompt)` builtin which
+// reads an integer; here we always return a string.
+fn input(prompt) {
+    __lamo_std_io_write(prompt)
+    return __lamo_std_io_read_line()
+}
+
+// inputInt(prompt) — print the prompt, then read an integer from stdin.
+// Returns 0 if the input is not a valid integer.
+fn inputInt(prompt) {
+    return input_int(prompt)
+}
+
+// inputStr(prompt) — alias for input(prompt). Reads a line as a string.
+fn inputStr(prompt) {
+    return input_str(prompt)
+}

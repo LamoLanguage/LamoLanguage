@@ -1,0 +1,8 @@
+// Concatenacao em loop - valida que a arena cuida da memoria
+let s = "";
+let i = 0;
+while (i < 100) {
+    s = s + "x";
+    i = i + 1;
+}
+print(s);

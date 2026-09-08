@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up GCC
+        run: |
+          gcc --version
+          sudo apt-get update -qq
+          # libx11-dev is needed only if any test program uses gui_* builtins.
+          # We install it so `make test` does not fail to link the generated
+          # lamo_exec against -lX11 when a runtime test exercises GUI code.
+          sudo apt-get install -y -qq libx11-dev
+
+      - name: Set up Python (for runtime embedding)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Build
+        run: make
+
+      - name: Test
+        run: make test

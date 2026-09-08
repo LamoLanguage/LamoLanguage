@@ -1,0 +1,3 @@
+import "dupimp_helper.lamo";
+import "dupimp_helper.lamo";
+print(helper_add(2, 3));

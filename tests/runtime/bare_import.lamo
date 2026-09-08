@@ -1,0 +1,10 @@
+// Phase 2: bare import syntax — `import math` and `import math as m`.
+import "../fixtures/bare_math.lamo" as math
+
+print(math.square(5))
+print(math.add(3, 4))
+
+import "../fixtures/bare_extra.lamo" as m
+
+print(m.double(21))
+print(m.greet("world"))

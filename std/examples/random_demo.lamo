@@ -1,0 +1,22 @@
+import std.random as random
+import std.io as io
+
+random.seed(42)
+io.println("int 1-100: " + random.int(1, 100))
+io.println("int 1-100: " + random.int(1, 100))
+io.println("int 1-100: " + random.int(1, 100))
+io.println("float: " + random.float())
+io.println("bool: " + random.bool())
+io.println("bool: " + random.bool())
+io.println("bool: " + random.bool())
+
+let arr = [1, 2, 3, 4, 5]
+io.println("choice: " + random.choice(arr))
+io.println("choice: " + random.choice(arr))
+
+let toShuffle = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+random.shuffle(toShuffle)
+io.println("shuffled: " + toShuffle)
+
+let sample = random.sample(arr, 2)
+io.println("sample of 2: " + sample)

@@ -1,0 +1,21 @@
+// Generics PR 1 — valid: minimal generic struct declaration and use.
+// Verifies that lamo check accepts the new syntax.
+
+struct Box<T> {
+    value: T,
+    label: string
+}
+
+struct Pair<A, B> {
+    first: A,
+    second: B
+}
+
+let bi = Box<int> { value: 42, label: "answer" }
+let bs = Box<string> { value: "hello", label: "greeting" }
+let p = Pair<int, string> { first: 1, second: "one" }
+
+print(bi.value)
+print(bs.value)
+print(p.first)
+print(p.second)

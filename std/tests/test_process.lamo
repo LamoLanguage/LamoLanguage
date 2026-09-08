@@ -1,0 +1,32 @@
+import std.testing as testing
+import std.process as process
+
+testing.begin("process.currentPid is positive")
+let pid = process.currentPid()
+testing.assertTrue(pid > 0)
+testing.end()
+
+testing.begin("process.pid is alias for currentPid")
+testing.assertEqual(process.pid(), process.currentPid())
+testing.end()
+
+testing.begin("process.run of 'true' returns 0")
+testing.assertEqual(process.run("true"), 0)
+testing.end()
+
+testing.begin("process.run of 'false' returns non-zero")
+let code = process.run("false")
+testing.assertTrue(code != 0)
+testing.end()
+
+testing.begin("process.exec returns non-empty string")
+let out = process.exec("echo lamo")
+testing.assertTrue(out != "")
+testing.end()
+
+testing.begin("process.exec output starts with 'lamo'")
+import std.string as text
+testing.assertEqual(text.startsWith(text.trim(out), "lamo"), 1)
+testing.end()
+
+testing.summary()

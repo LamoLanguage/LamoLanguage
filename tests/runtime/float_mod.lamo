@@ -1,0 +1,5 @@
+// Sprint 1 fix: lamo_mod para float agora usa fmod() corretamente.
+// Antes: 5.5 % 2.0 devolvia 1.0 (int truncado) em vez de 1.5 (fmod).
+print(5.5 % 2.0);
+print(10.0 % 3.0);
+print(7.5 % 2.5);

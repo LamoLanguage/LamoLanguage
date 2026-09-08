@@ -1,0 +1,15 @@
+import std.process as process
+import std.io as io
+
+io.println("current PID: " + process.currentPid())
+
+// Run a shell command (exit code only)
+let rc = process.run("echo 'hello from shell'")
+io.println("echo exit code: " + rc)
+
+// Capture output
+let output = process.exec("whoami")
+io.println("whoami: " + output)
+
+let date = process.exec("date +%Y-%m-%d")
+io.println("today: " + date)

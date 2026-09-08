@@ -1,0 +1,3 @@
+// OK: concatenacao de string com int (permitida, runtime faz coercion)
+let x = 5;
+print("valor: " + x);

@@ -1,0 +1,71 @@
+# ============================================================
+# LamoLanguage .gitignore
+# ============================================================
+
+# ---------- Build artifacts (C / GCC) ----------
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.dylib
+
+# ---------- Executables ----------
+*.exe
+lamo
+lamo_exec
+lamo_run
+
+# ---------- Lamo-generated C output ----------
+lamo_exec.c
+lamo_exec.exe
+lamo_run.c
+generated_*.c
+
+# ---------- Build directories ----------
+build/
+bin/
+BIN/
+out/
+dist/
+
+# ---------- LSP / compile_commands ----------
+compile_commands.json
+.cache/
+
+# ---------- Tests runner artifacts ----------
+tests/tmp/
+tests/output/
+*.expected.tmp
+*.actual.tmp
+
+# ---------- IDEs / Editors ----------
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+*~
+.clangd
+.clang-format
+.clang-tidy
+
+# ---------- Claude / AI agents ----------
+.claude/settings.local.json
+.agent-ctx/
+
+# ---------- OS junk ----------
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ---------- Logs / temp ----------
+*.log
+*.tmp
+*.bak
+*.orig
+
+# ---------- Local dependency dirs ----------
+deps/
+vendor/

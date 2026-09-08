@@ -1,0 +1,2 @@
+// ERRO: comparacao string < int
+print("abc" < 5);

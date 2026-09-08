@@ -1,0 +1,8 @@
+// Sprint 4: short alias variant — `import "..." as m;` + `m.fn(args)`.
+// Same as module_alias.lamo but with a one-letter alias to verify the
+// parser accepts any identifier, not just "math".
+
+import "../fixtures/module_alias_helper.lamo" as m;
+
+print(m.square(6));
+print(m.add(10, 20));

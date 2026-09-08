@@ -1,0 +1,6 @@
+// Escapando strings com \n \t \\ \" \xNN
+print("linha1\nlinha2");
+print("tab\taqui");
+print("barra: \\");
+print("aspas: \"hello\"");
+print("hex: \x41\x42\x43");

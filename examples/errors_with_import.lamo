@@ -1,0 +1,6 @@
+import "math.lamo";
+
+let x = 10
+let y = ;
+
+print(add(x, 7));

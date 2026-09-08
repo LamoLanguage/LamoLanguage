@@ -1,0 +1,5 @@
+// Teste: import dentro de comentário e string NÃO deve disparar import
+// import "nao_deve_ser_importado.lamo";
+
+print("import \"tambem_nao.lamo\";");
+print("Ok");

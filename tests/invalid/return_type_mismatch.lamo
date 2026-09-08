@@ -1,0 +1,5 @@
+fn greet() -> int {
+    return "hello";
+}
+
+let x = greet();

@@ -1,0 +1,29 @@
+enum Direction {
+    North,
+    South,
+    East,
+    West
+}
+
+fn direction_name(d: int) {
+    match d {
+        North => return "north",
+        South => return "south",
+        East => return "east",
+        West => return "west",
+        _ => return "unknown"
+    }
+}
+
+print(direction_name(North));
+print(direction_name(South));
+print(direction_name(East));
+print(direction_name(West));
+
+let c = East;
+match c {
+    North => print("N"),
+    South => print("S"),
+    East => print("E"),
+    West => print("W")
+}

@@ -1,0 +1,2 @@
+// ERRO: atribuicao para variavel inexistente (sem `let`)
+x = 42;

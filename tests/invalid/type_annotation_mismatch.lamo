@@ -1,0 +1,4 @@
+// ERRO: anotacao de tipo nao bate com o tipo inferido do inicializador.
+// Sprint 3: o semantico agora valida que `let x: int = "string";` e rejeitado.
+let bad: int = "string";
+print(bad);

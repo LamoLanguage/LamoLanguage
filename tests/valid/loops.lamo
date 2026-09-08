@@ -1,0 +1,17 @@
+// Loops e controle de fluxo
+let i = 0;
+while (i < 3) {
+    print(i);
+    i = i + 1;
+}
+
+for (let j = 0; j < 3; j = j + 1) {
+    print(j * 10);
+}
+
+let x = 5;
+if (x > 3) {
+    print("big");
+} else {
+    print("small");
+}

@@ -1,0 +1,37 @@
+import std.testing as testing
+import std.os as os
+
+testing.begin("os.name is non-empty")
+testing.assertTrue(os.name() != "")
+testing.end()
+
+testing.begin("os.arch is non-empty")
+testing.assertTrue(os.arch() != "")
+testing.end()
+
+testing.begin("os.cpuCount is positive")
+testing.assertTrue(os.cpuCount() > 0)
+testing.end()
+
+testing.begin("os.home is non-empty")
+testing.assertTrue(os.home() != "")
+testing.end()
+
+testing.begin("os.tempDir is non-empty")
+testing.assertTrue(os.tempDir() != "")
+testing.end()
+
+testing.begin("os.isWindows is 0 or 1")
+testing.assertTrue(os.isWindows() == 0 || os.isWindows() == 1)
+testing.end()
+
+testing.begin("os.isPosix is 0 or 1")
+testing.assertTrue(os.isPosix() == 0 || os.isPosix() == 1)
+testing.end()
+
+testing.begin("os.lineEnding is \\n or \\r\\n")
+let le = os.lineEnding()
+testing.assertTrue(le == "\n" || le == "\r\n")
+testing.end()
+
+testing.summary()

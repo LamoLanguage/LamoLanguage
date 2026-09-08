@@ -1,0 +1,2 @@
+// ERRO: subtracao entre string e int
+print("abc" - 1);

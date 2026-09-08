@@ -1,0 +1,6 @@
+// ERRO: impl para struct inexistente
+impl NoSuchType {
+    fn foo() {
+        print("hello")
+    }
+}

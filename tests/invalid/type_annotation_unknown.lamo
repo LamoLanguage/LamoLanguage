@@ -1,0 +1,4 @@
+// ERRO: nome de tipo desconhecido na anotacao.
+// Sprint 3: o semantico agora rejeita `let x: integer = 5;` (nome certo: int).
+let wrong: integer = 5;
+print(wrong);

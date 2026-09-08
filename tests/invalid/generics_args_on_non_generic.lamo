@@ -1,0 +1,6 @@
+// Generics PR 1 — invalid: type args provided to a non-generic struct.
+struct Plain {
+    x: int
+}
+
+let p = Plain<int> { x: 1 }

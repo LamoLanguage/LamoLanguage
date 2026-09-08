@@ -1,0 +1,7 @@
+// Generics PR 1 — invalid: type argument is not a known type.
+struct Box<T> {
+    value: T
+}
+
+// 'Foo' is not a builtin and not a declared struct.
+let b = Box<Foo> { value: 1 }

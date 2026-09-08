@@ -1,0 +1,2 @@
+// ERRO: tipo invalido em operacao (string * int)
+print("abc" * 3);

@@ -1,0 +1,45 @@
+// Runtime: esperado "ok"
+// GC Step 6: cycle test. Two arrays reference each other, forming a
+// reference cycle (a contains b, b contains a). After the function
+// that built the cycle returns, the cycle is unreachable from any
+// root. A mark-sweep GC reclaims it; a naive refcounting collector
+// would leak it forever.
+//
+// We measure the live heap count after a baseline collect, build the
+// cycle, collect again, and assert the count returned to baseline.
+// The exact baseline is implementation-defined (the runtime keeps
+// some bookkeeping allocations live), so we only check that building
+// + collecting a cycle didn't grow the heap.
+
+fn build_cycle() {
+    let a = [1, 2, 3];
+    let b = [4, 5, 6];
+    // Create the cycle: a's items[3] = b, b's items[3] = a.
+    push(a, b);
+    push(b, a);
+    // a and b go out of scope when build_cycle returns. The cycle
+    // (a -> b -> a) is now garbage — no root references either array.
+    return 0;
+}
+
+// Establish a baseline: collect once so lamo_gc_live_count reflects
+// only the allocations that are actually reachable.
+gc_collect();
+let baseline = gc_heap_count();
+
+// Build the cycle and drop all references to it.
+build_cycle();
+
+// Collect again. The cycle should be reclaimed; the live count should
+// return to (approximately) baseline.
+gc_collect();
+let after = gc_heap_count();
+
+// Allow a small variance (the build_cycle call itself may have left
+// one or two bookkeeping allocations), but the cycle (two arrays +
+// their items buffers = 4 allocations) must be reclaimed.
+if (after <= baseline + 1) {
+    print("ok");
+} else {
+    print("fail: cycle not reclaimed");
+}

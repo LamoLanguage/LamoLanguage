@@ -1,0 +1,29 @@
+let numbers = [10, 20, 30];
+
+print(numbers.len());
+print(numbers[0]);
+print(numbers[1]);
+print(numbers[2]);
+
+numbers.push(40);
+print(numbers.len());
+print(numbers[3]);
+
+numbers[0] = 100;
+print(numbers[0]);
+
+let popped = numbers.pop();
+print(popped);
+print(numbers.len());
+
+let sum = 0;
+for (let i = 0; i < numbers.len(); i++) {
+    sum += numbers[i]
+}
+print(sum);
+
+let matrix = [[1, 2], [3, 4]];
+print(matrix[0][0]);
+print(matrix[0][1]);
+print(matrix[1][0]);
+print(matrix[1][1]);

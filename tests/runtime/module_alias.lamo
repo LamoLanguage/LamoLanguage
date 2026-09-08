@@ -1,0 +1,11 @@
+// Sprint 4: namespaced import — `import "..." as alias;` + `alias.fn(args)`.
+// Verifies the module system end-to-end: parse, semantic check, codegen,
+// runtime call dispatch. The module file (module_alias_helper.lamo)
+// declares square, add, greet; the main file calls them through the
+// `math.` namespace.
+
+import "../fixtures/module_alias_helper.lamo" as math;
+
+print(math.square(5));
+print(math.add(3, 4));
+print(math.greet("world"));

@@ -1,0 +1,2 @@
+// Runtime: esperado helloworld
+print("hello" + "world");

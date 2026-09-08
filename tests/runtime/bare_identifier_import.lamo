@@ -1,0 +1,6 @@
+// Phase 2: bare identifier import (no quotes, no path).
+// `import math` is sugar for `import "math.lamo" as math`.
+import math
+
+print(math.square(5))
+print(math.add(3, 4))

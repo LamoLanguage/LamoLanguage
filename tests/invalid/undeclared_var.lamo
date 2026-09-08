@@ -1,0 +1,2 @@
+// ERRO: variavel nao declarada
+print(undeclared_var);

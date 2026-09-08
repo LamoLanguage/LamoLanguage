@@ -1,0 +1,13 @@
+// Sprint 3: arrays - literal, index, len, push, pop.
+let arr = [10, 20, 30];
+print(arr[0]);
+print(arr[1]);
+print(arr[2]);
+print(arr.len);
+print(len(arr));
+push(arr, 40);
+print(arr.len);
+print(arr[3]);
+print(pop(arr));
+print(arr.len);
+print(arr);

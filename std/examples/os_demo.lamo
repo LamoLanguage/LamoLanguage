@@ -1,0 +1,11 @@
+import std.os as os
+import std.io as io
+
+io.println("OS name:    " + os.name())
+io.println("Architecture: " + os.arch())
+io.println("CPU count:  " + os.cpuCount())
+io.println("Home dir:   " + os.home())
+io.println("Temp dir:   " + os.tempDir())
+io.println("isWindows:  " + os.isWindows())
+io.println("isPosix:    " + os.isPosix())
+io.println("Line ending bytes: " + os.lineEnding())

@@ -1,0 +1,12 @@
+gui_open(640, 480, "Lamo Native GUI");
+
+while (gui_should_close() == 0) {
+    gui_begin_frame(245, 247, 250);
+    gui_draw_rect(40, 40, 240, 90, 53, 116, 240);
+    gui_draw_rect(40, 160, 520, 40, 30, 30, 30);
+    gui_draw_text("Hello from Lamo", 72, 68, 255, 255, 255);
+    gui_draw_text("This window is rendered by generated Win32 C code.", 52, 168, 255, 255, 255);
+    gui_end_frame();
+}
+
+gui_close();

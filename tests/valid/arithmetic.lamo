@@ -1,0 +1,6 @@
+// Soma, subtracao, multiplicacao, divisao inteira e modulo
+print(1 + 2);
+print(10 - 4);
+print(3 * 4);
+print(20 / 6);
+print(20 % 6);

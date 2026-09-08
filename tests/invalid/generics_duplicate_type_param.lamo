@@ -1,0 +1,5 @@
+// Generics PR 1 — invalid: duplicate type parameter names in declaration.
+struct Dup<T, T> {
+    a: T,
+    b: T
+}

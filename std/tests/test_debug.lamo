@@ -1,0 +1,34 @@
+import std.testing as testing
+import std.debug as debug
+
+testing.begin("debug.log returns 0")
+testing.assertEqual(debug.log("test message"), 0)
+testing.end()
+
+testing.begin("debug.dump int returns 0")
+testing.assertEqual(debug.dump(42), 0)
+testing.end()
+
+testing.begin("debug.dump string returns 0")
+testing.assertEqual(debug.dump("hello"), 0)
+testing.end()
+
+testing.begin("debug.trace returns 0")
+testing.assertEqual(debug.trace("checkpoint"), 0)
+testing.end()
+
+testing.begin("debug.time returns 0")
+testing.assertEqual(debug.time("label1"), 0)
+testing.end()
+
+testing.begin("debug.timeEnd returns non-negative elapsed")
+debug.time("label2")
+let elapsed = debug.timeEnd("label2")
+testing.assertTrue(elapsed >= 0)
+testing.end()
+
+testing.begin("debug.assert passes on truthy condition")
+testing.assertEqual(debug.assert(1 == 1, "should not fire"), 0)
+testing.end()
+
+testing.summary()

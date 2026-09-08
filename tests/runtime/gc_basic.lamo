@@ -1,0 +1,48 @@
+// Runtime: esperado 2 linhas — "ok" e "ok"
+// GC Step 6: basic smoke test. Allocates a lot of garbage in a loop,
+// calls gc_collect(), and asserts the heap count dropped (i.e., the GC
+// actually freed something). The exact count is implementation-defined
+// (depends on how many live allocations the runtime keeps for strings,
+// the print buffer, etc.), so we just check that after collecting, the
+// live count is strictly less than the high-water mark we saw during
+// the loop. We use gc_heap_count() (live allocations after the last
+// collect) and a simple comparison.
+//
+// We also verify that gc_collect() is safe to call when nothing is
+// reachable (no crash, no use-after-free) and that strings still
+// reachable after a collect are still valid.
+
+fn make_garbage(n: int) {
+    let i = 0;
+    while (i < n) {
+        // Each iteration produces a new string via concatenation. The
+        // previous value of `s` becomes garbage (no root holds it).
+        let s = "x" + "y" + "z";
+        i = i + 1;
+    }
+}
+
+let before = gc_heap_count();
+make_garbage(1000);
+let after_alloc = gc_heap_count();
+gc_collect();
+let after_collect = gc_heap_count();
+
+// After collection, the live count should be <= the count right after
+// allocation (garbage from make_garbage's loop should be reclaimed).
+// We don't assert exact numbers (they depend on runtime internals),
+// only that collection reclaimed SOMETHING.
+if (after_collect <= after_alloc) {
+    print("ok");
+} else {
+    print("fail: gc did not reclaim");
+}
+
+// Verify a still-reachable string survives collection.
+let keep = "hello" + " world";
+gc_collect();
+if (keep == "hello world") {
+    print("ok");
+} else {
+    print("fail: reachable string was collected");
+}

@@ -1,0 +1,34 @@
+import std.testing as testing
+import std.io as io
+
+fn add(a, b) { return a + b }
+fn factorial(n) {
+    if (n <= 1) { return 1 }
+    return n * factorial(n - 1)
+}
+
+testing.begin("add basic")
+testing.assertEqual(add(2, 3), 5)
+testing.end()
+
+testing.begin("add negative")
+testing.assertEqual(add(-1, 1), 0)
+testing.end()
+
+testing.begin("factorial 5")
+testing.assertEqual(factorial(5), 120)
+testing.end()
+
+testing.begin("string equality")
+testing.assertEqual("hello" + " " + "world", "hello world")
+testing.end()
+
+testing.begin("boolean true")
+testing.assertTrue(1)
+testing.end()
+
+testing.begin("boolean false")
+testing.assertFalse(0)
+testing.end()
+
+testing.summary()

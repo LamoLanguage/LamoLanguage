@@ -1,0 +1,6 @@
+fn log_line() -> void {
+    print("logged");
+}
+if (log_line()) {
+    print("never");
+}

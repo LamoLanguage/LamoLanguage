@@ -1,0 +1,6 @@
+// Strings: literais, escapes e concatenacao
+print("hello");
+print("line1\nline2");
+print("a" + "b");
+let greeting = "hi ";
+print(greeting + "world");

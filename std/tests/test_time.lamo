@@ -1,0 +1,32 @@
+import std.testing as testing
+import std.time as time
+
+testing.begin("time.now is positive")
+testing.assertTrue(time.now() > 0)
+testing.end()
+
+testing.begin("time.timestamp is positive")
+testing.assertTrue(time.timestamp() > 0)
+testing.end()
+
+testing.begin("time.monotonic is positive")
+testing.assertTrue(time.monotonic() > 0)
+testing.end()
+
+testing.begin("time.monotonic is non-decreasing")
+let t1 = time.monotonic()
+let t2 = time.monotonic()
+testing.assertTrue(t2 >= t1)
+testing.end()
+
+testing.begin("time.elapsed is alias for monotonic")
+let m1 = time.elapsed()
+let m2 = time.monotonic()
+testing.assertTrue(m2 >= m1)
+testing.end()
+
+testing.begin("time.sleep returns 0")
+testing.assertEqual(time.sleep(1), 0)
+testing.end()
+
+testing.summary()

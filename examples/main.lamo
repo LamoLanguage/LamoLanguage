@@ -1,0 +1,7 @@
+import "math.lamo";
+
+let base = 5;
+
+print("Multi-file example:");
+print(add(base, 7));
+print(fib(6));

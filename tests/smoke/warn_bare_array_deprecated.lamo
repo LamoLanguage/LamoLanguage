@@ -1,0 +1,2 @@
+let xs: array = [1, 2];
+print(xs.len());

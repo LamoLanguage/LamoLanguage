@@ -1,0 +1,2 @@
+cannot assign to function 'go'
+functions are immutable

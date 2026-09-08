@@ -1,0 +1,56 @@
+// std.os — Operating system information.
+//
+// Part of the Lamo standard library. Provides read-only access to
+// information about the host operating system: name, architecture,
+// CPU count, home directory, temp directory.
+//
+// Usage:
+//   import std.os as os
+//   print(os.name())         // "linux" / "macos" / "windows"
+//   print(os.arch())         // "x64" / "arm64" / ...
+//   print(os.cpuCount())     // 8
+//   print(os.home())         // "/home/user"
+
+fn name() {
+    return __lamo_std_os_name()
+}
+
+fn arch() {
+    return __lamo_std_os_arch()
+}
+
+fn cpuCount() {
+    return __lamo_std_os_cpu_count()
+}
+
+fn home() {
+    return __lamo_std_os_home()
+}
+
+fn tempDir() {
+    return __lamo_std_os_temp_dir()
+}
+
+// isWindows() — returns 1 if running on Windows, 0 otherwise.
+fn isWindows() {
+    if (__lamo_std_os_name() == "windows") { return 1 }
+    return 0
+}
+
+// isPosix() — returns 1 if running on a POSIX-like system
+// (linux, macos, freebsd, openbsd), 0 otherwise.
+fn isPosix() {
+    let n = __lamo_std_os_name()
+    if (n == "linux") { return 1 }
+    if (n == "macos") { return 1 }
+    if (n == "freebsd") { return 1 }
+    if (n == "openbsd") { return 1 }
+    return 0
+}
+
+// lineEnding() — the OS-native line ending ("\r\n" on Windows,
+// "\n" on POSIX).
+fn lineEnding() {
+    if (isWindows() == 1) { return "\r\n" }
+    return "\n"
+}

@@ -1,0 +1,58 @@
+import std.collections as collections
+import std.io as io
+
+// Test List
+let list = collections.newList()
+collections.listPush(list, 10)
+collections.listPush(list, 20)
+collections.listPush(list, 30)
+io.println("List len: " + collections.listLen(list))
+io.println("List[0]: " + collections.listGet(list, 0))
+io.println("List[2]: " + collections.listGet(list, 2))
+collections.listSet(list, 1, 99)
+io.println("List[1] after set: " + collections.listGet(list, 1))
+io.println("List contains 99: " + collections.listContains(list, 99))
+io.println("List contains 50: " + collections.listContains(list, 50))
+io.println("List indexOf 30: " + collections.listIndexOf(list, 30))
+collections.listRemoveAt(list, 0)
+io.println("After removeAt(0), len: " + collections.listLen(list))
+io.println("First now: " + collections.listGet(list, 0))
+
+// Test Stack
+let stack = collections.newStack()
+collections.stackPush(stack, "a")
+collections.stackPush(stack, "b")
+collections.stackPush(stack, "c")
+io.println("Stack pop: " + collections.stackPop(stack))
+io.println("Stack pop: " + collections.stackPop(stack))
+io.println("Stack len: " + collections.stackLen(stack))
+
+// Test Queue
+let q = collections.newQueue()
+collections.queueEnqueue(q, 1)
+collections.queueEnqueue(q, 2)
+collections.queueEnqueue(q, 3)
+io.println("Queue dequeue: " + collections.queueDequeue(q))
+io.println("Queue dequeue: " + collections.queueDequeue(q))
+io.println("Queue len: " + collections.queueLen(q))
+
+// Test HashMap
+let map = collections.newHashMap()
+collections.mapPut(map, "name", "lamo")
+collections.mapPut(map, "version", 1)
+io.println("Map name: " + collections.mapGet(map, "name"))
+io.println("Map version: " + collections.mapGet(map, "version"))
+io.println("Map has 'name': " + collections.mapHas(map, "name"))
+io.println("Map has 'missing': " + collections.mapHas(map, "missing"))
+collections.mapRemove(map, "name")
+io.println("After remove, has 'name': " + collections.mapHas(map, "name"))
+
+// Test HashSet
+let hset = collections.newHashSet()
+collections.setAdd(hset, "apple")
+collections.setAdd(hset, "banana")
+collections.setAdd(hset, "apple")  // duplicate, should not add
+io.println("Set len: " + collections.setLen(hset))
+io.println("Set has 'apple': " + collections.setHas(hset, "apple"))
+collections.setRemove(hset, "apple")
+io.println("After remove, has 'apple': " + collections.setHas(hset, "apple"))

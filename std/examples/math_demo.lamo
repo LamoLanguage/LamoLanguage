@@ -1,0 +1,28 @@
+import std.math as math
+import std.io as io
+
+io.println("PI = " + math.PI)
+io.println("E = " + math.E)
+io.println("TAU = " + math.TAU)
+
+io.println("sqrt(16) = " + math.sqrt(16))
+io.println("pow(2, 10) = " + math.pow(2, 10))
+io.println("sin(PI/2) = " + math.sin(math.PI / 2.0))
+io.println("cos(0) = " + math.cos(0))
+io.println("floor(3.7) = " + math.floor(3.7))
+io.println("ceil(3.2) = " + math.ceil(3.2))
+io.println("round(3.5) = " + math.round(3.5))
+io.println("min(5, 3) = " + math.min(5, 3))
+io.println("max(5, 3) = " + math.max(5, 3))
+io.println("clamp(15, 0, 10) = " + math.clamp(15, 0, 10))
+io.println("abs(-42) = " + math.abs(-42))
+
+io.println("gcd(12, 18) = " + math.gcd(12, 18))
+io.println("factorial(5) = " + math.factorial(5))
+
+let nums = [1, 2, 3, 4, 5]
+io.println("sum = " + math.sum(nums))
+io.println("avg = " + math.avg(nums))
+
+io.println("90 deg in rad = " + math.toRadians(90))
+io.println("PI rad in deg = " + math.toDegrees(math.PI))

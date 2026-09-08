@@ -1,0 +1,5 @@
+fn greet(name: string) -> int {
+    print(name);
+    return 0;
+}
+greet(7);

@@ -1,0 +1,8 @@
+// Generics PR 1 — invalid: literal provides the wrong number of type args.
+// Pair expects 2 type params, but the literal provides only 1.
+struct Pair<A, B> {
+    first: A,
+    second: B
+}
+
+let p = Pair<int> { first: 1, second: 2 }

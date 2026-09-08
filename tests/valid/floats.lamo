@@ -1,0 +1,5 @@
+// Floats interoperam com inteiros
+let pi = 3.14;
+print(pi);
+print(1 + 0.5);
+print(2.5 * 2);

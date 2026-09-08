@@ -1,0 +1,5 @@
+// ERRO: `let x = ;` deve ser rejeitado com "missing initializer"
+// Sprint 1 fix: o parser agora emite um erro explicito em vez de
+// "invalid expression, found ;".
+let x = ;
+print(x);

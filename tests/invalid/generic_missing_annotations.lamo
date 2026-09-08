@@ -1,0 +1,4 @@
+fn pair<A, B>(a, b) {
+    return a;
+}
+pair(1, 2);

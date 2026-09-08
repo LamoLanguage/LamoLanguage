@@ -1,0 +1,31 @@
+// ─────────────────────────────────────────────────────────────────────────
+// HTTP server example — official.
+//
+// As of compiler 2.3.0, the Lamo runtime ships an opt-in mark-sweep GC
+// (see docs/MEMORY-MODEL.md). The HTTP server loop calls gc_collect()
+// every 100 requests, so long-running http_serve() no longer grows the
+// arena without bound. Programs that need finer control can call
+// gc_collect() manually at natural boundaries (end of request, batch
+// processing, etc.) or set an auto-trigger threshold via
+// gc_set_threshold(N).
+//
+// Concurrency: the server is single-threaded, one request at a time.
+// Multi-threaded HTTP is future work (depends on the broader threading
+// story for Lamo).
+//
+// Error paths:
+//   - Port already in use: the runtime prints "failed to bind HTTP
+//     server on port N" to stderr and http_serve returns 0.
+//   - Malformed request: if the request line doesn't parse, the server
+//     responds with 404 "not found".
+//   - Client disconnect mid-request: the recv() returns <= 0 and the
+//     handler returns without sending a response.
+// ─────────────────────────────────────────────────────────────────────────
+
+http_route("/", "Lamo HTTP server");
+http_route("/health", "ok");
+http_route("/about", "official example — uses opt-in mark-sweep GC");
+
+print("HTTP server on http://127.0.0.1:8080");
+print("GC auto-collects every 100 requests (see docs/MEMORY-MODEL.md)");
+http_serve(8080);

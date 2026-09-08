@@ -1,0 +1,47 @@
+// std.time — Time functions.
+//
+// Part of the Lamo standard library. Provides wall-clock time,
+// monotonic time for elapsed measurements, and sleep.
+//
+// All times are in milliseconds unless noted otherwise.
+//
+// Usage:
+//   import std.time as time
+//   let start = time.now()
+//   // ... do work ...
+//   let elapsed = time.now() - start
+//   print(elapsed)
+//   time.sleep(500)   // sleep 500 ms
+
+// now() — current wall-clock time in milliseconds since Unix epoch.
+fn now() {
+    return __lamo_std_time_now()
+}
+
+// timestamp() — current Unix timestamp in seconds.
+fn timestamp() {
+    return __lamo_std_time_timestamp()
+}
+
+// sleep(ms) — sleep for `ms` milliseconds. Returns 0.
+fn sleep(ms) {
+    return __lamo_std_time_sleep(ms)
+}
+
+// monotonic() — current value of the monotonic clock, in milliseconds.
+// Use this to measure elapsed time without being affected by system
+// clock changes. Subtract two monotonic() values to get the elapsed ms.
+fn monotonic() {
+    return __lamo_std_time_monotonic()
+}
+
+// elapsed() — alias for monotonic(), kept for API symmetry with the
+// user-facing spec. Use as: `let t = time.elapsed()` ... `time.elapsed() - t`.
+fn elapsed() {
+    return __lamo_std_time_monotonic()
+}
+
+// (Note: a `measure(fn)` helper that takes a function argument is not
+// possible in current Lamo because the language does not yet support
+// first-class function values or anonymous functions. Use the
+// `let t = time.now(); ...; time.now() - t` pattern manually.)

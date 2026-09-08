@@ -1,0 +1,3 @@
+// Teste de input_str
+let nome = input_str("Como te chamas? ");
+print("Ola, " + nome + "!");

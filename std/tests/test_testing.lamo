@@ -1,0 +1,37 @@
+import std.testing as testing
+
+testing.begin("assertEqual with integers")
+testing.assertEqual(2 + 2, 4)
+testing.end()
+
+testing.begin("assertEqual with strings")
+testing.assertEqual("hello" + " " + "world", "hello world")
+testing.end()
+
+testing.begin("assertTrue with truthy int")
+testing.assertTrue(1)
+testing.end()
+
+testing.begin("assertTrue with truthy string")
+testing.assertTrue("non-empty")
+testing.end()
+
+testing.begin("assertFalse with zero")
+testing.assertFalse(0)
+testing.end()
+
+testing.begin("assertFalse with empty string")
+testing.assertFalse("")
+testing.end()
+
+testing.begin("assert with truthy expression")
+testing.assert(3 > 2)
+testing.end()
+
+testing.begin("multiple assertions in one case")
+testing.assertEqual(1 + 1, 2)
+testing.assertEqual(2 + 2, 4)
+testing.assertTrue(10 > 5)
+testing.end()
+
+testing.summary()

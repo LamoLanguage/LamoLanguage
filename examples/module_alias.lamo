@@ -1,0 +1,16 @@
+// Sprint 4 example: namespaced imports.
+//
+// Run with: ./lamo run examples/module_alias.lamo
+//
+// Demonstrates the `import "..." as alias;` syntax and `alias.fn(args)`
+// member-call form. Compare with examples/main.lamo which uses the
+// legacy global-merge form (`import "math.lamo";` then `add(...)`
+// directly).
+
+import "math.lamo" as math;
+
+let base = 5;
+
+print("Namespaced import example:");
+print(math.add(base, 7));     // 12
+print(math.fib(6));           // 8

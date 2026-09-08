@@ -1,0 +1,2 @@
+bare 'array' annotation is deprecated
+prefer 'array<T>'

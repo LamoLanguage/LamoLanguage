@@ -1,0 +1,27 @@
+let x = 10;
+let y = 20;
+let z = x + y;
+print("Resultado da soma:");
+print(z);
+
+fn fatorial(n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * fatorial(n - 1);
+}
+
+print("Fatorial de 5:");
+print(fatorial(5));
+
+let i = 0;
+print("Contagem ate 5:");
+while (i < 5) {
+    i = i + 1;
+    print(i);
+}
+
+print("Loop for:");
+for (let j = 0; j < 3; j = j + 1) {
+    print(j);
+}

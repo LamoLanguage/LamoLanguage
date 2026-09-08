@@ -1,0 +1,7 @@
+fn id<T>(x: T) -> T { return x; }
+fn swap2<A, B>(a: A, b: B) -> A {
+    return a;
+}
+let n = id<int>(42);
+print(n);
+print(id("ok"));

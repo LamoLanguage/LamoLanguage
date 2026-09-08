@@ -1,0 +1,26 @@
+import std.io as io
+import std.math as math
+import std.string as text
+import std.path as path
+import std.os as os
+import std.time as time
+import std.process as process
+import std.env as env
+
+io.println("Hello, std.io!")
+io.println("PI = " + math.PI)
+io.println("sqrt(16) = " + math.sqrt(16))
+io.println("pow(2,10) = " + math.pow(2, 10))
+io.println("upper = " + text.upper("hello world"))
+io.println("trim = '" + text.trim("   hi   ") + "'")
+io.println("split = " + text.split("a,b,c", ","))
+io.println("join = " + path.join("a", "b/c"))
+io.println("parent = " + path.parent("/x/y/z.txt"))
+io.println("filename = " + path.filename("/x/y/z.txt"))
+io.println("extension = " + path.extension("/x/y/z.txt"))
+io.println("os = " + os.name() + " " + os.arch())
+io.println("cpus = " + os.cpuCount())
+io.println("home = " + os.home())
+io.println("pid = " + process.currentPid())
+io.println("time = " + time.timestamp())
+io.println("PATH has = " + env.has("PATH"))

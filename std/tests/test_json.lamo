@@ -1,0 +1,64 @@
+import std.testing as testing
+import std.json as json
+
+testing.begin("json.parse string")
+testing.assertEqual(json.parse("\"hello world\""), "hello world")
+testing.end()
+
+testing.begin("json.parse integer")
+testing.assertEqual(json.parse("42"), 42)
+testing.end()
+
+testing.begin("json.parse true is 1")
+testing.assertEqual(json.parse("true"), 1)
+testing.end()
+
+testing.begin("json.parse false is 0")
+testing.assertEqual(json.parse("false"), 0)
+testing.end()
+
+testing.begin("json.parse null is -1")
+testing.assertEqual(json.parse("null"), -1)
+testing.end()
+
+testing.begin("json.parse array length")
+let arr = json.parse("[1, 2, 3, 4, 5]")
+testing.assertEqual(arr.len(), 5)
+testing.end()
+
+testing.begin("json.parse array element")
+testing.assertEqual(arr[0], 1)
+testing.assertEqual(arr[4], 5)
+testing.end()
+
+testing.begin("json.parse object and getString")
+let obj = json.parse("{\"name\":\"lamo\",\"version\":1}")
+testing.assertEqual(json.getString(obj, "name"), "lamo")
+testing.end()
+
+testing.begin("json.getInt from parsed object")
+testing.assertEqual(json.getInt(obj, "version"), 1)
+testing.end()
+
+testing.begin("json.has")
+testing.assertEqual(json.has(obj, "name"), 1)
+testing.assertEqual(json.has(obj, "missing"), 0)
+testing.end()
+
+testing.begin("json.len of object")
+testing.assertEqual(json.len(obj), 2)
+testing.end()
+
+testing.begin("json.stringify string")
+testing.assertEqual(json.stringify("hello"), "\"hello\"")
+testing.end()
+
+testing.begin("json.stringify integer")
+testing.assertEqual(json.stringify(42), "42")
+testing.end()
+
+testing.begin("json.stringify array")
+testing.assertEqual(json.stringify([1, 2, 3]), "[1,2,3]")
+testing.end()
+
+testing.summary()

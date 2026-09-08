@@ -1,0 +1,18 @@
+import std.io as io
+
+// std.io provides convenience functions around the language-level
+// print/input builtins. The key additions are:
+//   - println (same as print, explicit name)
+//   - eprint  (stderr output)
+//   - write   (no trailing newline)
+//   - readLine, input, inputInt, inputStr
+
+io.println("Hello, std.io!")
+io.write("no newline here -> ")
+io.println("<-")
+io.eprint("this goes to stderr")
+
+// To read from stdin, uncomment the next two lines:
+// io.write("Enter your name: ")
+// let name = io.readLine()
+// io.println("Hello, " + name)

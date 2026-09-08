@@ -1,0 +1,2 @@
+// ERRO: divisao por string
+print(10 / "abc");

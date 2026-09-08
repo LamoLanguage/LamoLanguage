@@ -1,0 +1,44 @@
+import std.testing as testing
+import std.path as path
+
+testing.begin("path.join two components")
+testing.assertEqual(path.join("a", "b/c"), "a/b/c")
+testing.end()
+
+testing.begin("path.parent")
+testing.assertEqual(path.parent("/x/y/z.txt"), "/x/y")
+testing.end()
+
+testing.begin("path.filename")
+testing.assertEqual(path.filename("/x/y/z.txt"), "z.txt")
+testing.end()
+
+testing.begin("path.extension")
+testing.assertEqual(path.extension("z.txt"), ".txt")
+testing.end()
+
+testing.begin("path.stem strips extension")
+testing.assertEqual(path.stem("/x/y/z.txt"), "z")
+testing.end()
+
+testing.begin("path.hasExtension positive")
+testing.assertEqual(path.hasExtension("file.txt"), 1)
+testing.end()
+
+testing.begin("path.hasExtension negative")
+testing.assertEqual(path.hasExtension("file"), 0)
+testing.end()
+
+testing.begin("path.basename alias")
+testing.assertEqual(path.basename("/x/y/z.txt"), "z.txt")
+testing.end()
+
+testing.begin("path.dirname alias")
+testing.assertEqual(path.dirname("/x/y/z.txt"), "/x/y")
+testing.end()
+
+testing.begin("path.normalize")
+testing.assertEqual(path.normalize("/a/b/../c/./d"), "/a/c/d")
+testing.end()
+
+testing.summary()

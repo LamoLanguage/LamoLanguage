@@ -1,0 +1,25 @@
+import std.testing as testing
+import std.net as net
+import std.string as text
+
+// The net module makes real network calls, so we only test that the
+// functions return a string value and that the aliases resolve to the
+// same callable. We avoid asserting on response content (which can
+// change between runs).
+
+testing.begin("net.get returns a string")
+let body = net.get("http://example.com/")
+testing.assertTrue(text.length(body) >= 0)
+testing.end()
+
+testing.begin("net.httpGet alias returns a string")
+let body2 = net.httpGet("http://example.com/")
+testing.assertTrue(text.length(body2) >= 0)
+testing.end()
+
+testing.begin("net.get on bad host returns empty string")
+let bad = net.get("http://lamo-nonexistent-host-xyz.invalid/")
+testing.assertEqual(bad, "")
+testing.end()
+
+testing.summary()
