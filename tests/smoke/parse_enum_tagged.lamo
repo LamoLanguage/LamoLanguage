@@ -1,0 +1,28 @@
+// Parse + check only: generic tagged enums with mixed unit/payload
+// variants, nested payload annotations, and match-arm bindings.
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Shape {
+    Circle(int),
+    Rect(int, int),
+    Point
+}
+
+struct Widget {
+    id: int,
+    label: string
+}
+
+enum Slot {
+    Filled(Widget),
+    Empty
+}
+
+let o = Some(10)
+match o {
+    Some(v) => print(v),
+    None => print("none")
+}

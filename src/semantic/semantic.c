@@ -36,7 +36,11 @@ typedef enum {
      * Per SPEC §6.3/§7.5, using a void value in a boolean context (if /
      * while / for conditions, && || ! operands) is a COMPILE-TIME error;
      * semantic_check_truthy_operand() enforces exactly that. */
-    LAMO_TYPE_VOID
+    LAMO_TYPE_VOID,
+    /* 2.6.0: a value of a tagged-union enum (SPEC §3.5). The concrete
+     * enum's name rides on the AST node via sema_enum_name / symbol
+     * struct_name, mirroring how structs are tracked. */
+    LAMO_TYPE_ENUM
 } LamoType;
 
 typedef enum {
@@ -206,6 +210,7 @@ static const char* type_name(LamoType type) {
         case LAMO_TYPE_ARRAY:  return "array";
         case LAMO_TYPE_STRUCT: return "struct";
         case LAMO_TYPE_VOID:   return "void";
+        case LAMO_TYPE_ENUM:   return "enum";
         case LAMO_TYPE_UNKNOWN: return "unknown";
     }
     return "unknown";
@@ -748,6 +753,28 @@ static const char* find_enum_variant_any(SemanticContext* ctx, const char* varia
     return NULL;
 }
 
+/* ── 2.6.0: tagged-union enum helpers (SPEC §3.5) ──────────────────── */
+
+/* Number of payloads carried by variant `index` of `ed` (0 for unit
+ * variants and for legacy untagged enums, which have no payload list). */
+static int enum_variant_payload_count(const ASTEnumDecl* ed, int index) {
+    if (!ed || !ed->variant_payload_counts || index < 0 || index >= ed->variant_count) {
+        return 0;
+    }
+    return ed->variant_payload_counts[index];
+}
+
+/* An enum is a "tagged union" when any variant carries a payload.
+ * Untagged enums keep the legacy plain-int runtime representation. */
+static int enum_decl_is_tagged(const ASTEnumDecl* ed) {
+    int i;
+    if (!ed || !ed->variant_payload_counts) return 0;
+    for (i = 0; i < ed->variant_count; i++) {
+        if (ed->variant_payload_counts[i] > 0) return 1;
+    }
+    return 0;
+}
+
 /* Find a method on a struct by name. Returns the AST_FN_DECL node, or
  * NULL if not found. Searches all impl blocks for the given struct. */
 static ASTFnDecl* find_method(SemanticContext* ctx, const char* struct_name, const char* method_name) {
@@ -1248,7 +1275,7 @@ static LamoType semantic_visit_call_full(SemanticContext* ctx, const char* name,
     int builtin_arity = builtin_function_arity(name);
     LamoType return_type = LAMO_TYPE_UNKNOWN;
 
-    /* 1. Infer every argument's legacy enum type first (order preserved:
+    /* Infer every argument's legacy enum type first (order preserved:
      * errors report innermost-first as before). */
     LamoType arg_types[LAMO_MAX_BIND_ARGS];
     const char* arg_full[LAMO_MAX_BIND_ARGS] = {0};
@@ -1256,6 +1283,68 @@ static LamoType semantic_visit_call_full(SemanticContext* ctx, const char* name,
     for (int i = 0; i < arg_count; i++) {
         arg_types[i & (LAMO_MAX_BIND_ARGS - 1)] = semantic_infer_expression(ctx, args[i]);
         if (checkable) arg_full[i] = arg_concrete_full_type(ctx, args[i]);
+    }
+
+    /* ── 2.6.0: enum variant constructor — `Some(42)` (SPEC §3.5) ─────
+     * Variant constructors take precedence over function lookup: a
+     * payload variant is not a value, only a constructor. Arity is
+     * checked against the variant's payload count, and concrete
+     * payload annotations get a light type check (numeric widening
+     * kept, matching §7.3). The call node is annotated so codegen
+     * emits lamo_make_enum instead of a call. */
+    {
+        int vidx = -1;
+        const char* venum = find_enum_variant_any(ctx, name, &vidx);
+        if (venum) {
+            ASTEnumDecl* ved = find_enum_def(ctx, venum);
+            int pcount = enum_variant_payload_count(ved, vidx);
+            if (ved && pcount > 0) {
+                if (arg_count != pcount) {
+                    char message[256];
+                    snprintf(message, sizeof(message),
+                             "variant '%s' expects %d payload argument(s), got %d",
+                             name, pcount, arg_count);
+                    semantic_error_at(ctx, line, column, message);
+                } else if (ved->variant_payloads) {
+                    /* Light concrete-payload check. Type-parameter
+                     * payloads (e.g. `Some(T)`) are erased at runtime
+                     * and stay unchecked until enum type annotations
+                     * land (SPEC §13). */
+                    for (int i = 0; i < pcount; i++) {
+                        const char* ann = ved->variant_payloads[vidx][i];
+                        if (!ann || !arg_full[i]) continue;
+                        if (ved->type_param_count > 0) {
+                            int is_tp = 0;
+                            for (int t = 0; t < ved->type_param_count; t++) {
+                                if (strcmp(ann, ved->type_params[t]) == 0) { is_tp = 1; break; }
+                            }
+                            if (is_tp) continue;
+                        }
+                        if (strchr(ann, '<') != NULL) continue;  /* nested generic: erased */
+                        LamoType want = LAMO_TYPE_UNKNOWN;
+                        if      (strcmp(ann, "int") == 0)    want = LAMO_TYPE_INT;
+                        else if (strcmp(ann, "float") == 0)  want = LAMO_TYPE_FLOAT;
+                        else if (strcmp(ann, "string") == 0) want = LAMO_TYPE_STRING;
+                        else if (strcmp(ann, "bool") == 0)   want = LAMO_TYPE_BOOL;
+                        else continue;  /* struct payload: erased representation */
+                        LamoType got = arg_types[i];
+                        int numeric_widen = (want == LAMO_TYPE_INT && got == LAMO_TYPE_FLOAT);
+                        if (got != LAMO_TYPE_UNKNOWN && got != want && !numeric_widen) {
+                            char message[300];
+                            snprintf(message, sizeof(message),
+                                     "payload %d of variant '%s': expected '%s', got '%s'",
+                                     i + 1, name, ann, type_name(got));
+                            semantic_error_at(ctx, line, column, message);
+                        }
+                    }
+                }
+                if (call_node_for_annotation) {
+                    call_node_for_annotation->sema_enum_name = ved->name;
+                    call_node_for_annotation->sema_variant_index = vidx;
+                }
+                return LAMO_TYPE_ENUM;
+            }
+        }
     }
 
     if (symbol && symbol->kind == SYMBOL_FN) {
@@ -2295,16 +2384,76 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
         }
         case AST_ENUM_DECL: {
             /* Already registered during the pre-pass. Validate variant
-             * names are unique within the enum. */
+             * names are unique within the enum.
+             *
+             * 2.6.0: for tagged-union enums we also validate
+             *   - type parameter uniqueness + constraint catalogue (same
+             *     rules as generic structs, PR 6),
+             *   - each payload annotation: builtins, declared structs,
+             *     the enum's own type parameters, or nested generics of
+             *     those (same rule as struct fields). */
             ASTEnumDecl* ed = (ASTEnumDecl*)node;
-            for (int i = 0; i < ed->variant_count; i++) {
-                for (int j = i + 1; j < ed->variant_count; j++) {
+            int i;
+            for (i = 0; i < ed->variant_count; i++) {
+                int j;
+                for (j = i + 1; j < ed->variant_count; j++) {
                     if (strcmp(ed->variants[i], ed->variants[j]) == 0) {
                         char message[256];
                         snprintf(message, sizeof(message),
                                  "duplicate variant '%s' in enum '%s'",
                                  ed->variants[i], ed->name);
                         semantic_error_at(ctx, node->line, node->column, message);
+                    }
+                }
+            }
+            /* 2.6.0: type parameter checks (mirrors struct logic). */
+            for (i = 0; i < ed->type_param_count; i++) {
+                int j;
+                for (j = i + 1; j < ed->type_param_count; j++) {
+                    if (strcmp(ed->type_params[i], ed->type_params[j]) == 0) {
+                        char message[256];
+                        snprintf(message, sizeof(message),
+                                 "duplicate type parameter '%s' in enum '%s'",
+                                 ed->type_params[i], ed->name);
+                        semantic_error_at(ctx, node->line, node->column, message);
+                    }
+                }
+                {
+                    const char* con = ed->type_param_constraints
+                                          ? ed->type_param_constraints[i] : NULL;
+                    if (con && lamo_constraint_kind(con) < 0) {
+                        char message[256];
+                        snprintf(message, sizeof(message),
+                                 "unknown constraint '%s' on type parameter '%s' of enum '%s' (catalogue: Any, Eq, Ord, Num, Hash, Show)",
+                                 con, ed->type_params[i], ed->name);
+                        semantic_error_at(ctx, node->line, node->column, message);
+                    }
+                }
+            }
+            /* 2.6.0: payload annotation validation. The shared annotation
+             * validator takes a struct-shaped view; a stack shim with the
+             * enum's name + type parameters gives payloads exactly the
+             * same validation rules as struct fields. */
+            if (ed->variant_payloads) {
+                for (i = 0; i < ed->variant_count; i++) {
+                    int pc = enum_variant_payload_count(ed, i);
+                    int j;
+                    for (j = 0; j < pc; j++) {
+                        const char* ann = ed->variant_payloads[i][j];
+                        ASTStructDecl shim;
+                        if (!ann) continue;
+                        memset(&shim, 0, sizeof(shim));
+                        shim.name = ed->name;
+                        shim.type_params = ed->type_params;
+                        shim.type_param_constraints = ed->type_param_constraints;
+                        shim.type_param_count = ed->type_param_count;
+                        if (!lamo_validate_annotation_tree(ctx, &shim, ann)) {
+                            char message[320];
+                            snprintf(message, sizeof(message),
+                                     "enum '%s' variant '%s' payload %d has unknown type '%s' (expected builtins, declared structs, this enum's type parameters, or generic nests of those)",
+                                     ed->name, ed->variants[i], j + 1, ann);
+                            semantic_error_at(ctx, node->line, node->column, message);
+                        }
                     }
                 }
             }
@@ -2316,20 +2465,23 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
             /* Validate each arm's pattern. Patterns can be:
              *   - "_" (wildcard) - always matches
              *   - Identifier that names an enum variant
-             *   - Integer literal (not yet supported - future work)
+             *   - Variant with payload bindings — `Some(x) =>` (2.6.0)
              * We check that named patterns correspond to a registered
              * enum variant. Exhaustiveness is checked below. */
             int has_wildcard = 0;
             int total_variants = -1;
             const char* scrut_enum_name = NULL;
-            /* If the scrutinee's type is known to be an enum (we'd need
-             * to track enum types on Symbols, which we don't currently
-             * do for variables - only struct types are tracked). For now,
-             * we accept any patterns and check exhaustiveness only when
-             * all variants of some enum are listed (heuristic). */
+            ASTEnumDecl* matched_enum = NULL;  /* 2.6.0: enum decl being matched */
             for (int i = 0; i < ms->arm_count; i++) {
                 if (ms->pattern_is_wildcard[i]) {
                     has_wildcard = 1;
+                    /* 2.6.0: wildcard arms cannot take bindings. */
+                    if (ms->pattern_bindings && ms->pattern_binding_counts[i] > 0) {
+                        char message[256];
+                        snprintf(message, sizeof(message),
+                                 "wildcard pattern '_' cannot bind payloads");
+                        semantic_error_at(ctx, node->line, node->column, message);
+                    }
                 } else {
                     int vidx = -1;
                     const char* ename = find_enum_variant_any(ctx, ms->patterns[i], &vidx);
@@ -2340,10 +2492,12 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                                  ms->patterns[i]);
                         semantic_error_at(ctx, node->line, node->column, message);
                     } else {
+                        ASTEnumDecl* arm_enum = find_enum_def(ctx, ename);
                         /* Track the enum we're matching against. */
                         if (scrut_enum_name == NULL) {
                             scrut_enum_name = ename;
-                            total_variants = ((ASTEnumDecl*)find_enum_def(ctx, ename))->variant_count;
+                            matched_enum = arm_enum;
+                            total_variants = arm_enum->variant_count;
                         } else if (strcmp(scrut_enum_name, ename) != 0) {
                             char message[256];
                             snprintf(message, sizeof(message),
@@ -2351,12 +2505,61 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                                      ms->patterns[i], ename, scrut_enum_name);
                             semantic_error_at(ctx, node->line, node->column, message);
                         }
+                        /* 2.6.0: payload-binding validation for tagged
+                         * unions — binding count must equal the variant's
+                         * payload count, in both directions. */
+                        if (arm_enum) {
+                            int pcount = enum_variant_payload_count(arm_enum, vidx);
+                            int bcount = ms->pattern_bindings ? ms->pattern_binding_counts[i] : 0;
+                            if (pcount > 0 && bcount == 0) {
+                                char message[256];
+                                snprintf(message, sizeof(message),
+                                         "variant '%s' carries %d payload(s); bind them: %s(a) => ...",
+                                         ms->patterns[i], pcount, ms->patterns[i]);
+                                semantic_error_at(ctx, node->line, node->column, message);
+                            } else if (pcount == 0 && bcount > 0) {
+                                char message[256];
+                                snprintf(message, sizeof(message),
+                                         "variant '%s' carries no payloads; remove the binding list from the pattern",
+                                         ms->patterns[i]);
+                                semantic_error_at(ctx, node->line, node->column, message);
+                            } else if (pcount > 0 && bcount > 0 && pcount != bcount) {
+                                char message[256];
+                                snprintf(message, sizeof(message),
+                                         "variant '%s' carries %d payload(s), but the pattern binds %d",
+                                         ms->patterns[i], pcount, bcount);
+                                semantic_error_at(ctx, node->line, node->column, message);
+                            }
+                        }
                     }
                 }
-                /* Visit the arm body. */
+                /* Visit the arm body. 2.6.0: binding names are defined in
+                 * a fresh scope that covers exactly the arm body, so
+                 * `Some(x)` binds `x` without leaking into later arms. */
                 if (ms->bodies[i]) {
-                    semantic_visit_statement(ctx, ms->bodies[i]);
+                    int bcount = (ms->pattern_bindings && !ms->pattern_is_wildcard[i])
+                                     ? ms->pattern_binding_counts[i] : 0;
+                    if (bcount > 0) {
+                        Scope* parent = ctx->current_scope;
+                        ctx->current_scope = scope_push(parent);
+                        for (int b = 0; b < bcount; b++) {
+                            const char* bname = ms->pattern_bindings[i][b];
+                            if (!bname) continue;
+                            scope_define(ctx, ctx->current_scope, bname, SYMBOL_VAR, 0,
+                                         LAMO_TYPE_UNKNOWN, node->line, node->column,
+                                         node->file_path);
+                        }
+                        semantic_visit_statement(ctx, ms->bodies[i]);
+                        ctx->current_scope = parent;
+                    } else {
+                        semantic_visit_statement(ctx, ms->bodies[i]);
+                    }
                 }
+            }
+            /* 2.6.0: annotate the match so codegen uses the tag-compare
+             * desugar when the matched enum is a tagged union. */
+            if (matched_enum && enum_decl_is_tagged(matched_enum)) {
+                ms->sema_enum_name = matched_enum->name;
             }
             /* Exhaustiveness check: if we know the enum (total_variants > 0)
              * and there's no wildcard, count unique variants. If the count
@@ -2459,6 +2662,28 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
                          identifier->name);
                 semantic_error_at_hint(ctx, node->line, node->column, message, hint);
                 return LAMO_TYPE_UNKNOWN;
+            }
+            /* 2.6.0: a payload variant is not a first-class value — using
+             * it bare (e.g. `let x = Some;`) is a compile error with a
+             * hint pointing at constructor syntax (SPEC §3.5). */
+            if (symbol->type == LAMO_TYPE_ENUM) {
+                int vidx = -1;
+                const char* venum = find_enum_variant_any(ctx, identifier->name, &vidx);
+                if (venum) {
+                    ASTEnumDecl* ved = find_enum_def(ctx, venum);
+                    if (ved && enum_variant_payload_count(ved, vidx) > 0) {
+                        char message[256];
+                        char hint[256];
+                        snprintf(message, sizeof(message),
+                                 "variant '%s' carries a payload and cannot be used as a value",
+                                 identifier->name);
+                        snprintf(hint, sizeof(hint),
+                                 "construct it with %s(...) and match with %s(x) => ...",
+                                 identifier->name, identifier->name);
+                        semantic_error_at_hint(ctx, node->line, node->column, message, hint);
+                        return LAMO_TYPE_UNKNOWN;
+                    }
+                }
             }
             return symbol->type;
         }
@@ -3055,13 +3280,19 @@ int semantic_analyze_full(ASTProgram* program, const char* file_path,
 
     /* Phase 2: register enum variants as global int constants. Each
      * variant becomes a SYMBOL_VAR with type INT and a known value (its
-     * index). The codegen emits these as global LamoValue variables. */
+     * index). The codegen emits these as global LamoValue variables.
+     * 2.6.0: variants of TAGGED-union enums register as LAMO_TYPE_ENUM
+     * instead — their runtime representation is a tagged LamoValue, not
+     * a plain int (SPEC §3.5). Unit variants of tagged enums are still
+     * usable as bare identifiers (they are values); payload variants
+     * only through constructor calls, enforced at the identifier site. */
     for (ASTNode* node = program->declarations; node; node = node->next) {
         if (node->type == AST_ENUM_DECL) {
             ASTEnumDecl* ed = (ASTEnumDecl*)node;
+            LamoType variant_type = enum_decl_is_tagged(ed) ? LAMO_TYPE_ENUM : LAMO_TYPE_INT;
             for (int i = 0; i < ed->variant_count; i++) {
-                /* Register the variant name as a global int constant. */
-                scope_define(&ctx, ctx.current_scope, ed->variants[i], SYMBOL_VAR, 0, LAMO_TYPE_INT, node->line, node->column, node->file_path);
+                /* Register the variant name as a global constant. */
+                scope_define(&ctx, ctx.current_scope, ed->variants[i], SYMBOL_VAR, 0, variant_type, node->line, node->column, node->file_path);
             }
         }
     }

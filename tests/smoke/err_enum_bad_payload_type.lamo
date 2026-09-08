@@ -1,0 +1,4 @@
+enum Bad {
+    Carries(nonsense_type)
+}
+Carries(1)

@@ -1,0 +1,5 @@
+enum Option {
+    Some(int),
+    None
+}
+Some(1, 2)

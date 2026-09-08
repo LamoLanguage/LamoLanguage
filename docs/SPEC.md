@@ -340,6 +340,8 @@ belongs to `match`), not as a generic struct literal.
 
 ### 3.5 `enum` declarations
 
+**Simple (untagged) enums:**
+
 ```
 enum Color {
     Red,
@@ -352,8 +354,66 @@ enum Color {
 - Variants are accessible by bare name (no `Color::Red` qualifier).
 - Variant names must be unique within their enum. Across enums, variant name
   collisions are allowed — the later declaration shadows the earlier (with a
-  warning). This is a known wart; future tagged-enum support (§13) will fix
-  this by requiring qualification.
+  warning). This is a known wart; future work will fix this by requiring
+  qualification.
+
+**Tagged-union enums (2.6.0):** variants may carry payloads:
+
+```
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E)
+}
+
+enum Shape {
+    Circle(int),
+    Rect(int, int),
+    Point
+}
+```
+
+Grammar: a variant is `IDENT [ '(' TYPE (',' TYPE)* ')' ]`. Payload types
+use the same annotation grammar as struct fields — builtins, declared
+structs, the enum's own type parameters (§3.4.1 rules apply: parameters
+are declared with `<T, ...>` after the enum name, constraints use the
+§7.8 catalogue), or nested generics of those.
+
+Semantics:
+
+- An enum is a **tagged union** when at least one variant carries a
+  payload. A tagged enum's values are a distinct runtime kind (tag +
+  payloads + variant name); they are NOT ints and never mix with the
+  untagged int representation. Untagged enums keep the exact §3.5 int
+  behavior — existing programs are unaffected.
+- **Construction:** a payload variant used as a call (`Some(42)`,
+  `Rect(3, 4)`) constructs a value; the argument count must equal the
+  variant's payload count, and concrete (non-type-parameter) payload
+  annotations are checked against the arguments with the same numeric
+  widening as §7.3. Type-parameter payloads (`Some(x)` where the payload
+  is `T`) are erased at runtime, like all generics (RFC §8).
+- **Unit variants inside a tagged enum** (`None`, `Point`) are values of
+  the tagged kind, usable by bare name.
+- A payload variant used WITHOUT a call is a compile error — a payload
+  variant is a constructor, not a value:
+  `variant 'Some' carries a payload and cannot be used as a value`.
+- **Equality** (`==` / `!=`): two tagged values are equal when their
+  variant tags match AND their payloads compare equal element-wise.
+  Comparing values of different enums (or an enum against a non-enum) is
+  simply false, never an error.
+- **Truthiness:** tagged values are always truthy (like structs). Match
+  on the variant, not on truthiness.
+- **Printing:** tagged values render `Some(42)`, `None`, `Err("oops")` —
+  including inside arrays and structs.
+- **No enum type annotations yet.** `let o: Option<int> = ...` is not
+  accepted in 2.6.0 (the annotation resolver only knows builtins,
+  structs, and type parameters). Inference covers construction, match,
+  assignment, and passing tagged values through unannotated parameters.
+  Generic-enum annotations are future work (§13).
 
 ### 3.6 `impl` blocks
 
@@ -442,13 +502,22 @@ match color {
 }
 ```
 
-- Patterns are enum variant names or `_` (wildcard).
+- Patterns are enum variant names, variant names with payload bindings
+  (2.6.0: `Some(x) => ...`), or `_` (wildcard).
 - The first matching arm wins.
 - Arm bodies can be a single expression or a `{ }` block.
+- **Payload bindings (2.6.0):** when the matched enum is a tagged union
+  (§3.5), a pattern may bind the variant's payloads to names —
+  `Some(x) => ...` or `Rect(w, h) => ...`. The binding list must match
+  the variant's payload count exactly; binding names are scoped to the
+  arm body and may shadow outer variables. A payload variant pattern
+  WITHOUT bindings is an error, as is a binding list on a unit variant
+  or on the `_` wildcard. On the generated-code side the scrutinee is
+  evaluated exactly once.
 - The compiler emits a warning when the scrutinee has a known enum type and
   not all variants are covered (and no `_` arm is present).
-- Today, `match` only supports variant equality. Literal patterns, destructuring,
-  and guards are future work (§13).
+- Today, untagged `match` only supports variant equality. Literal patterns,
+  further destructuring (nested payloads), and guards are future work (§13).
 
 ### 4.7 Assignment
 
@@ -1169,3 +1238,12 @@ this spec. When they ship, this spec will be updated.
   with deprecation of bare `array` (§7.9), and void-in-boolean-context
   validation (§7.10). Function hoisting within a file formalized in §3.3.
   `Option<T>`/`Result<T,E>` APIs shipped in `std.collections`.
+- **v1.3** (compiler 2.6.0) — tagged-union enums (§3.5): payload-carrying
+  variants, generic enum parameters, constructor-call validation, match
+  payload bindings (§4.6), tagged equality and rendering. Boolean print
+  form decided and specced (§8.1). Module-boundary struct type flow
+  (§5.5/§10.2). Explicit type arguments on module member calls (§5.5).
+  Module rules: entry-file `main()` semantics (§12.1), contextual `pub`
+  export markers with the §10.6 two-step rollout, folder-based modules
+  (§10.3), duplicate-import decision table (§10.5), and module loading in
+  `eval`/`repl` (§10.7).

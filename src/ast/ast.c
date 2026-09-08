@@ -382,7 +382,12 @@ ASTNode* ast_new_impl_decl_generic(char* struct_name,
     return (ASTNode*)node;
 }
 
-ASTNode* ast_new_enum_decl(char* name, char** variants, int variant_count, int line, int column) {
+/* 2.6.0 shared body of the enum constructors. All strings/arrays passed
+ * in are strdup'd/copied here (NULL entries in payload lists allowed). */
+static ASTNode* ast_new_enum_decl_impl(char* name, char** variants, int variant_count,
+                                       char*** variant_payloads, int* variant_payload_counts,
+                                       char** type_params, char** type_param_constraints, int type_param_count,
+                                       int line, int column) {
     ASTEnumDecl* node = (ASTEnumDecl*)ast_new_node(AST_ENUM_DECL, sizeof(ASTEnumDecl), line, column);
     int i;
     node->name = strdup(name);
@@ -391,10 +396,59 @@ ASTNode* ast_new_enum_decl(char* name, char** variants, int variant_count, int l
     for (i = 0; i < variant_count; i++) {
         node->variants[i] = strdup(variants[i] ? variants[i] : "");
     }
+    if (variant_count > 0 && variant_payloads && variant_payload_counts) {
+        node->variant_payloads = malloc(sizeof(char**) * (size_t)variant_count);
+        node->variant_payload_counts = malloc(sizeof(int) * (size_t)variant_count);
+        for (i = 0; i < variant_count; i++) {
+            int pc = variant_payload_counts[i];
+            int j;
+            node->variant_payload_counts[i] = pc;
+            if (pc > 0 && variant_payloads[i]) {
+                node->variant_payloads[i] = malloc(sizeof(char*) * (size_t)pc);
+                for (j = 0; j < pc; j++) {
+                    node->variant_payloads[i][j] = variant_payloads[i][j]
+                        ? strdup(variant_payloads[i][j]) : NULL;
+                }
+            } else {
+                node->variant_payloads[i] = NULL;
+                node->variant_payload_counts[i] = 0;
+            }
+        }
+    }
+    if (type_param_count > 0 && type_params) {
+        node->type_params = malloc(sizeof(char*) * (size_t)type_param_count);
+        node->type_param_constraints = malloc(sizeof(char*) * (size_t)type_param_count);
+        node->type_param_count = type_param_count;
+        for (i = 0; i < type_param_count; i++) {
+            node->type_params[i] = type_params[i] ? strdup(type_params[i]) : NULL;
+            node->type_param_constraints[i] =
+                (type_param_constraints && type_param_constraints[i])
+                    ? strdup(type_param_constraints[i]) : NULL;
+        }
+    }
     return (ASTNode*)node;
 }
 
-ASTNode* ast_new_match_stmt(ASTNode* scrutinee, char** patterns, int* pattern_is_wildcard, ASTNode** bodies, int arm_count, int line, int column) {
+ASTNode* ast_new_enum_decl_full(char* name, char** variants, int variant_count,
+                                char*** variant_payloads, int* variant_payload_counts,
+                                char** type_params, char** type_param_constraints, int type_param_count,
+                                int line, int column) {
+    return ast_new_enum_decl_impl(name, variants, variant_count,
+                                  variant_payloads, variant_payload_counts,
+                                  type_params, type_param_constraints, type_param_count,
+                                  line, column);
+}
+
+ASTNode* ast_new_enum_decl(char* name, char** variants, int variant_count, int line, int column) {
+    return ast_new_enum_decl_impl(name, variants, variant_count,
+                                  NULL, NULL, NULL, NULL, 0, line, column);
+}
+
+/* 2.6.0 shared body of the match constructors. pattern_bindings entries
+ * are strdup'd; pattern_bindings[a] == NULL means "arm without parens". */
+static ASTNode* ast_new_match_stmt_impl(ASTNode* scrutinee, char** patterns, int* pattern_is_wildcard,
+                                        char*** pattern_bindings, int* pattern_binding_counts,
+                                        ASTNode** bodies, int arm_count, int line, int column) {
     ASTMatchStmt* node = (ASTMatchStmt*)ast_new_node(AST_MATCH_STMT, sizeof(ASTMatchStmt), line, column);
     int i;
     node->scrutinee = scrutinee;
@@ -402,12 +456,44 @@ ASTNode* ast_new_match_stmt(ASTNode* scrutinee, char** patterns, int* pattern_is
     node->patterns = arm_count > 0 ? malloc(sizeof(char*) * (size_t)arm_count) : NULL;
     node->pattern_is_wildcard = arm_count > 0 ? malloc(sizeof(int) * (size_t)arm_count) : NULL;
     node->bodies = arm_count > 0 ? malloc(sizeof(ASTNode*) * (size_t)arm_count) : NULL;
+    if (arm_count > 0 && pattern_bindings && pattern_binding_counts) {
+        node->pattern_bindings = malloc(sizeof(char**) * (size_t)arm_count);
+        node->pattern_binding_counts = malloc(sizeof(int) * (size_t)arm_count);
+    }
     for (i = 0; i < arm_count; i++) {
         node->patterns[i] = strdup(patterns[i] ? patterns[i] : "_");
         node->pattern_is_wildcard[i] = pattern_is_wildcard ? pattern_is_wildcard[i] : 0;
         node->bodies[i] = bodies[i];
+        if (node->pattern_bindings) {
+            int bc = pattern_binding_counts[i];
+            int j;
+            if (bc > 0 && pattern_bindings[i]) {
+                node->pattern_bindings[i] = malloc(sizeof(char*) * (size_t)bc);
+                node->pattern_binding_counts[i] = bc;
+                for (j = 0; j < bc; j++) {
+                    node->pattern_bindings[i][j] = pattern_bindings[i][j]
+                        ? strdup(pattern_bindings[i][j]) : NULL;
+                }
+            } else {
+                node->pattern_bindings[i] = NULL;
+                node->pattern_binding_counts[i] = 0;
+            }
+        }
     }
     return (ASTNode*)node;
+}
+
+ASTNode* ast_new_match_stmt_full(ASTNode* scrutinee, char** patterns, int* pattern_is_wildcard,
+                                 char*** pattern_bindings, int* pattern_binding_counts,
+                                 ASTNode** bodies, int arm_count, int line, int column) {
+    return ast_new_match_stmt_impl(scrutinee, patterns, pattern_is_wildcard,
+                                   pattern_bindings, pattern_binding_counts,
+                                   bodies, arm_count, line, column);
+}
+
+ASTNode* ast_new_match_stmt(ASTNode* scrutinee, char** patterns, int* pattern_is_wildcard, ASTNode** bodies, int arm_count, int line, int column) {
+    return ast_new_match_stmt_impl(scrutinee, patterns, pattern_is_wildcard,
+                                   NULL, NULL, bodies, arm_count, line, column);
 }
 
 ASTNode* ast_new_struct_literal(char* struct_name, char** field_names, ASTNode** field_values, int field_count, char** type_args, int type_arg_count, int line, int column) {
@@ -657,8 +743,26 @@ void ast_free(ASTNode* node) {
                 free(ed->name);
                 for (i = 0; i < ed->variant_count; i++) {
                     free(ed->variants[i]);
+                    /* 2.6.0: free per-variant payload type lists. */
+                    if (ed->variant_payloads && ed->variant_payloads[i]) {
+                        int j;
+                        int pc = ed->variant_payload_counts ? ed->variant_payload_counts[i] : 0;
+                        for (j = 0; j < pc; j++) {
+                            free(ed->variant_payloads[i][j]);
+                        }
+                        free(ed->variant_payloads[i]);
+                    }
                 }
                 free(ed->variants);
+                if (ed->variant_payloads) free(ed->variant_payloads);
+                if (ed->variant_payload_counts) free(ed->variant_payload_counts);
+                /* 2.6.0: free generic type parameters. */
+                for (i = 0; i < ed->type_param_count; i++) {
+                    free(ed->type_params[i]);
+                    if (ed->type_param_constraints) free(ed->type_param_constraints[i]);
+                }
+                if (ed->type_params) free(ed->type_params);
+                if (ed->type_param_constraints) free(ed->type_param_constraints);
                 break;
             }
             case AST_MATCH_STMT: {
@@ -668,10 +772,21 @@ void ast_free(ASTNode* node) {
                 for (i = 0; i < ms->arm_count; i++) {
                     free(ms->patterns[i]);
                     ast_free(ms->bodies[i]);
+                    /* 2.6.0: free per-arm binding lists. */
+                    if (ms->pattern_bindings && ms->pattern_bindings[i]) {
+                        int j;
+                        int bc = ms->pattern_binding_counts ? ms->pattern_binding_counts[i] : 0;
+                        for (j = 0; j < bc; j++) {
+                            free(ms->pattern_bindings[i][j]);
+                        }
+                        free(ms->pattern_bindings[i]);
+                    }
                 }
                 free(ms->patterns);
                 free(ms->pattern_is_wildcard);
                 free(ms->bodies);
+                if (ms->pattern_bindings) free(ms->pattern_bindings);
+                if (ms->pattern_binding_counts) free(ms->pattern_binding_counts);
                 break;
             }
             case AST_STRUCT_LITERAL: {

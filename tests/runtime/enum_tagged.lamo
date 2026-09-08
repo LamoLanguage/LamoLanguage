@@ -1,0 +1,53 @@
+// SPEC §3.5 (2.6.0): tagged-union enums — payload-carrying variants,
+// generic payloads, unit variants inside tagged enums, and match
+// bindings. Printing renders Variant(payloads); equality compares the
+// variant tag payload-wise.
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E)
+}
+
+enum Shape {
+    Circle(int),
+    Rect(int, int),
+    Point
+}
+
+fn describe(s) {
+    match s {
+        Circle(r) => print("circle"),
+        Rect(w, h) => print("rect"),
+        Point => print("point")
+    }
+}
+
+let opt = Some("hello")
+print(opt)
+match opt {
+    Some(msg) => print(msg),
+    None => print("none")
+}
+
+let nothing = None
+print(nothing)
+
+let r = Err("oops")
+print(r)
+match r {
+    Ok(v) => print("ok"),
+    Err(e) => print(e)
+}
+
+describe(Circle(5))
+describe(Rect(3, 4))
+describe(Point)
+
+print(Some(1) == Some(1))
+print(Some(1) == Some(2))
+print(Ok(1) == Err(1))
+print([Some(1), None])

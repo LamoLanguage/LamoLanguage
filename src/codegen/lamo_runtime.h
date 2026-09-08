@@ -54,7 +54,12 @@ typedef enum {
      * type tag so the printer can render it differently and so the
      * semantic/codegen can tell struct-typed values from raw arrays at
      * runtime (useful for debugging and for printing). */
-    LAMO_VALUE_STRUCT
+    LAMO_VALUE_STRUCT,
+    /* 2.6.0: tagged-union enum values (SPEC §3.5). Payloads live in a
+     * LamoArray under array_value (same trick as structs); the variant
+     * index is in int_value and the variant NAME travels in enum_name so
+     * printing can render `Some(42)` / `None` without compiler help. */
+    LAMO_VALUE_ENUM
 } LamoValueType;
 
 /* Sprint 3: forward-declare LamoArray so we can reference it from inside
@@ -69,6 +74,10 @@ typedef struct {
     /* Sprint 3: only set when type == LAMO_VALUE_ARRAY. Pointer to a
      * heap-allocated LamoArray; the array is owned by the arena. */
     struct LamoArray* array_value;
+    /* 2.6.0: only set when type == LAMO_VALUE_ENUM. Static variant name
+     * emitted as a C string literal by the codegen — NOT owned, never
+     * freed. NULL for all other value types. */
+    const char* enum_name;
 } LamoValue;
 
 /* Sprint 3: LamoArray — a growable array of LamoValues.
@@ -98,6 +107,7 @@ static LAMO_UNUSED LamoValue lamo_make_int(long long value) {
     result.float_value = 0.0;
     result.string_value = NULL;
     result.array_value = NULL;
+    result.enum_name = NULL;
     return result;
 }
 
@@ -108,6 +118,7 @@ static LAMO_UNUSED LamoValue lamo_make_float(double value) {
     result.float_value = value;
     result.string_value = NULL;
     result.array_value = NULL;
+    result.enum_name = NULL;
     return result;
 }
 
@@ -118,6 +129,7 @@ static LAMO_UNUSED LamoValue lamo_make_bool(int value) {
     result.float_value = 0.0;
     result.string_value = NULL;
     result.array_value = NULL;
+    result.enum_name = NULL;
     return result;
 }
 
@@ -128,6 +140,7 @@ static LAMO_UNUSED LamoValue lamo_make_string(const char* value) {
     result.float_value = 0.0;
     result.string_value = value ? value : "";
     result.array_value = NULL;
+    result.enum_name = NULL;
     return result;
 }
 
@@ -142,6 +155,7 @@ static LAMO_UNUSED LamoValue lamo_make_array(LamoArray* array) {
     result.float_value = 0.0;
     result.string_value = NULL;
     result.array_value = array;
+    result.enum_name = NULL;
     return result;
 }
 
@@ -156,6 +170,26 @@ static LAMO_UNUSED LamoValue lamo_make_struct(LamoArray* array) {
     result.float_value = 0.0;
     result.string_value = NULL;
     result.array_value = array;
+    result.enum_name = NULL;
+    return result;
+}
+
+/* 2.6.0: build a tagged-union enum value (SPEC §3.5). `tag` is the
+ * variant's index within its enum, `variant_name` is the static name
+ * literal (borrowed, NOT copied), and `payloads` is a pre-filled
+ * LamoArray (NULL for unit variants). Mirrors lamo_make_struct's
+ * ownership: the payload array is arena-allocated by the caller.
+ * The payload helpers live further down, after lamo_array_alloc and
+ * lamo_runtime_type_error, to keep this section dependency-free. */
+static LAMO_UNUSED LamoValue lamo_make_enum(long long tag, const char* variant_name,
+                                             struct LamoArray* payloads) {
+    LamoValue result;
+    result.type = LAMO_VALUE_ENUM;
+    result.int_value = tag;
+    result.float_value = 0.0;
+    result.string_value = NULL;
+    result.array_value = payloads;
+    result.enum_name = variant_name;
     return result;
 }
 
@@ -380,7 +414,8 @@ static LAMO_UNUSED void lamo_gc_mark_value(LamoValue v) {
             }
             /* Not found in heap — it's a static literal. Nothing to mark. */
         }
-    } else if (v.type == LAMO_VALUE_ARRAY || v.type == LAMO_VALUE_STRUCT) {
+    } else if (v.type == LAMO_VALUE_ARRAY || v.type == LAMO_VALUE_STRUCT ||
+               v.type == LAMO_VALUE_ENUM) {
         if (v.array_value) {
             LamoGcHeader* h = lamo_gc_heap_head;
             while (h) {
@@ -578,6 +613,40 @@ static LAMO_UNUSED char* lamo_value_to_owned_string(LamoValue value) {
     if (value.type == LAMO_VALUE_BOOL) {
         return lamo_heap_strdup(value.int_value ? "true" : "false");
     }
+    if (value.type == LAMO_VALUE_ENUM) {
+        /* 2.6.0: render tagged-union values as `Some(42)` / `None`. The
+         * variant name travels inside the value (see lamo_make_enum). */
+        size_t cap = 64;
+        size_t len = 0;
+        char* out = (char*)malloc(cap);
+        if (!out) return lamo_heap_strdup("");
+        out[0] = '\0';
+        #define LAMO_APPEND_STR(s) do { \
+            size_t addlen = strlen(s); \
+            if (len + addlen + 1 > cap) { \
+                while (len + addlen + 1 > cap) cap *= 2; \
+                char* grown = (char*)realloc(out, cap); \
+                if (!grown) { free(out); return lamo_heap_strdup(""); } \
+                out = grown; \
+            } \
+            memcpy(out + len, s, addlen); \
+            len += addlen; \
+            out[len] = '\0'; \
+        } while (0)
+        LAMO_APPEND_STR(value.enum_name ? value.enum_name : "enum");
+        if (value.array_value && value.array_value->count > 0) {
+            LAMO_APPEND_STR("(");
+            for (long long i = 0; i < value.array_value->count; i++) {
+                if (i > 0) LAMO_APPEND_STR(", ");
+                char* elem = lamo_value_to_owned_string(value.array_value->items[i]);
+                LAMO_APPEND_STR(elem);
+                free(elem);
+            }
+            LAMO_APPEND_STR(")");
+        }
+        #undef LAMO_APPEND_STR
+        return out;
+    }
     if (value.type == LAMO_VALUE_ARRAY || value.type == LAMO_VALUE_STRUCT) {
         /* Recursively render the array/struct into a heap string. We
          * build a temporary buffer, then strdup it. The capacity grows
@@ -657,6 +726,11 @@ static LAMO_UNUSED int lamo_is_truthy(LamoValue value) {
          * represents a constructed object). */
         return value.array_value != NULL;
     }
+    if (value.type == LAMO_VALUE_ENUM) {
+        /* 2.6.0: enum values are always truthy — they carry identity
+         * (the variant), like structs. Match on the tag, not truthiness. */
+        return 1;
+    }
     return value.int_value != 0;
 }
 
@@ -697,6 +771,13 @@ static LAMO_UNUSED void lamo_print_value(LamoValue value) {
             }
         }
         printf(" }\n");
+    } else if (value.type == LAMO_VALUE_ENUM) {
+        /* 2.6.0: print tagged-union values via the string renderer so a
+         * top-level print matches how the value renders inside arrays
+         * and structs: `Some(42)`, `None`, `Err("oops")`. */
+        char* text = lamo_value_to_owned_string(value);
+        printf("%s\n", text);
+        free(text);
     } else if (value.type == LAMO_VALUE_BOOL) {
         /* SPEC §8 (2.6.0 decision): booleans render as `true`/`false`,
          * matching the bool literals in the language, the array/struct
@@ -752,6 +833,43 @@ static LAMO_UNUSED LamoArray* lamo_array_alloc(long long initial_capacity) {
     array->items = (LamoValue*)lamo_arena_alloc(sizeof(LamoValue) * (size_t)initial_capacity);
     array->count = 0;
     array->capacity = initial_capacity;
+    return array;
+}
+
+/* ── 2.6.0: tagged-union enum payload helpers (SPEC §3.5/§4.6) ────── */
+
+/* Does this enum value carry the given variant tag? Used by the match
+ * desugar; a non-enum value never matches (defensive). */
+static LAMO_UNUSED int lamo_enum_tag_is(LamoValue value, long long tag) {
+    if (value.type != LAMO_VALUE_ENUM) return 0;
+    return value.int_value == tag;
+}
+
+/* Payload access on a tagged-union enum value (SPEC §4.6 match
+ * bindings). Index bounds are guaranteed by the compiler — the pattern
+ * arity is validated against the enum declaration — but we keep the
+ * runtime check for safety and match the array runtime's behavior. */
+static LAMO_UNUSED LamoValue lamo_enum_payload(LamoValue value, long long index) {
+    if (value.type != LAMO_VALUE_ENUM) {
+        lamo_runtime_type_error("expected enum value for payload access");
+    }
+    if (!value.array_value || index < 0 || index >= value.array_value->count) {
+        lamo_runtime_type_error("enum payload index out of range (internal error)");
+    }
+    return value.array_value->items[index];
+}
+
+/* Allocate an empty payload array for enum construction. Same arena
+ * ownership as struct fields (see lamo_struct_alloc). */
+static LAMO_UNUSED LamoArray* lamo_enum_payloads_alloc(long long count) {
+    LamoArray* array;
+    long long i;
+    if (count < 0) count = 0;
+    array = lamo_array_alloc(count > 0 ? count : 4);
+    for (i = 0; i < count; i++) {
+        array->items[i] = lamo_make_int(0);
+    }
+    array->count = count;
     return array;
 }
 
@@ -1027,6 +1145,25 @@ static LAMO_UNUSED LamoValue lamo_equal(LamoValue left, LamoValue right) {
         right.type == LAMO_VALUE_ARRAY || right.type == LAMO_VALUE_STRUCT) {
         if (left.type != right.type) return lamo_make_bool(0);
         return lamo_make_bool(left.array_value == right.array_value);
+    }
+    /* 2.6.0: tagged-union enum values compare by variant tag first, then
+     * payload-wise (like a derived equality). Unit variants (no payloads)
+     * therefore compare by tag alone. */
+    if (left.type == LAMO_VALUE_ENUM || right.type == LAMO_VALUE_ENUM) {
+        if (left.type != right.type) return lamo_make_bool(0);
+        if (left.int_value != right.int_value) return lamo_make_bool(0);
+        if (!left.array_value || !right.array_value) {
+            return lamo_make_bool(left.array_value == right.array_value);
+        }
+        if (left.array_value->count != right.array_value->count) {
+            return lamo_make_bool(0);
+        }
+        for (long long i = 0; i < left.array_value->count; i++) {
+            LamoValue eq = lamo_equal(left.array_value->items[i],
+                                      right.array_value->items[i]);
+            if (!lamo_is_truthy(eq)) return lamo_make_bool(0);
+        }
+        return lamo_make_bool(1);
     }
     if (left.type == LAMO_VALUE_STRING || right.type == LAMO_VALUE_STRING) {
         if (left.type != LAMO_VALUE_STRING || right.type != LAMO_VALUE_STRING) {

@@ -1,0 +1,12 @@
+Some(hello)
+hello
+None
+Err(oops)
+oops
+circle
+rect
+point
+true
+false
+false
+[Some(1), None]

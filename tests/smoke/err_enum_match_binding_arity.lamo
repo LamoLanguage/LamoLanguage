@@ -1,0 +1,7 @@
+enum Pair2 {
+    Pair(int, int)
+}
+let p = Pair(1, 2)
+match p {
+    Pair(a) => print(a)
+}

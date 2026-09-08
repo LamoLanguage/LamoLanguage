@@ -294,7 +294,9 @@ enum Option<T> {
 }
 ```
 
-(Requires tagged-union enums — see §10 for the dependency.) Provides:
+(Tagged-union enums SHIPPED in 2.6.0 — the §10 dependency is resolved;
+language-level `enum Option<T> { Some(T), None }` with `Some(x) =>`
+match bindings is now real, per SPEC §3.5/§4.6.) Provides:
 
 - `Some(x)` constructor.
 - `None` literal.
@@ -363,7 +365,10 @@ This RFC depended on:
    initial generics rollout shipped WITHOUT struct-backed `Option`/`Result`** —
    `array<T>`, `Map<K, V>`, `Set<T>`, and generic structs/functions shipped
    first; `Option`/`Result` follow as function-shaped APIs until tagged
-   enums land.
+   enums land. ✅ **RESOLVED (2.6.0):** tagged-union enums shipped as a
+   language feature (payload variants, `Some(x) =>` match bindings, generic
+   enum parameters) — see SPEC §3.5/§4.6. The `std.collections` function-
+   shaped APIs keep working unchanged.
 
 Actual rollout (all complete):
 

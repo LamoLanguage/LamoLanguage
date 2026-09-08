@@ -1569,38 +1569,207 @@ ASTNode* parse_statement(Parser* p) {
         }
         char* name = strdup(p->current.value);
         eat_p(p, TOKEN_IDENTIFIER);
+        /* 2.6.0: optional generic parameter list — `enum Option<T> { ... }`.
+         * Same grammar as struct type params; validated in the semantic
+         * pass against the constraint catalogue. */
+        char** enum_type_params = NULL;
+        char** enum_type_constraints = NULL;
+        int enum_type_param_count = 0;
+        if (p->current.type == TOKEN_LT) {
+            if (!parse_type_param_list(p, &enum_type_params, &enum_type_constraints,
+                                       &enum_type_param_count)) {
+                free(name);
+                return parser_recover(p);
+            }
+        }
         expect_p(p, TOKEN_LBRACE, "expected '{' to open enum body");
         char** variants = NULL;
         int variant_count = 0;
+        /* 2.6.0: per-variant payload type lists (tagged unions). */
+        char*** payload_lists = NULL;
+        int* payload_counts = NULL;
         while (p->current.type != TOKEN_RBRACE && p->current.type != TOKEN_EOF) {
             if (p->current.type != TOKEN_IDENTIFIER) {
                 parser_error(p, "expected variant name in enum body");
-                for (int i = 0; i < variant_count; i++) free(variants[i]);
-                free(variants); free(name);
+                for (int i = 0; i < variant_count; i++) {
+                    free(variants[i]);
+                    if (payload_lists && payload_lists[i]) {
+                        for (int j = 0; j < payload_counts[i]; j++) free(payload_lists[i][j]);
+                        free(payload_lists[i]);
+                    }
+                }
+                free(variants); free(payload_lists); free(payload_counts);
+                for (int i = 0; i < enum_type_param_count; i++) {
+                    free(enum_type_params[i]);
+                    if (enum_type_constraints && enum_type_constraints[i]) free(enum_type_constraints[i]);
+                }
+                free(enum_type_params); free(enum_type_constraints);
+                free(name);
                 return parser_recover(p);
             }
             char* vname = strdup(p->current.value);
             eat_p(p, TOKEN_IDENTIFIER);
+            /* 2.6.0: optional payload list — `Some(T)` or `Rect(int, int)`.
+             * Payload types use the same annotation grammar as fields
+             * (builtins, declared structs, the enum's own type params,
+             * and nested generics of those). */
+            char** payloads = NULL;
+            int pcount = 0;
+            if (p->current.type == TOKEN_LPAREN) {
+                advance_p(p);  /* consume '(' */
+                while (p->current.type != TOKEN_RPAREN && p->current.type != TOKEN_EOF) {
+                    char* ptype = parse_type_str(p);
+                    if (!ptype) {
+                        parser_error(p, "expected payload type after '(' in enum variant");
+                        free(vname);
+                        for (int j = 0; j < pcount; j++) free(payloads[j]);
+                        free(payloads);
+                        for (int i = 0; i < variant_count; i++) {
+                            free(variants[i]);
+                            if (payload_lists && payload_lists[i]) {
+                                for (int j2 = 0; j2 < payload_counts[i]; j2++) free(payload_lists[i][j2]);
+                                free(payload_lists[i]);
+                            }
+                        }
+                        free(variants); free(payload_lists); free(payload_counts);
+                        for (int i = 0; i < enum_type_param_count; i++) {
+                            free(enum_type_params[i]);
+                            if (enum_type_constraints && enum_type_constraints[i]) free(enum_type_constraints[i]);
+                        }
+                        free(enum_type_params); free(enum_type_constraints);
+                        free(name);
+                        return parser_recover(p);
+                    }
+                    {
+                        char** resized = realloc(payloads, sizeof(char*) * (size_t)(pcount + 1));
+                        if (!resized) {
+                            parser_error(p, "out of memory while growing variant payload list");
+                            free(ptype);
+                            for (int j = 0; j < pcount; j++) free(payloads[j]);
+                            free(payloads);
+                            free(vname);
+                            for (int i = 0; i < variant_count; i++) {
+                                free(variants[i]);
+                                if (payload_lists && payload_lists[i]) {
+                                    for (int j2 = 0; j2 < payload_counts[i]; j2++) free(payload_lists[i][j2]);
+                                    free(payload_lists[i]);
+                                }
+                            }
+                            free(variants); free(payload_lists); free(payload_counts);
+                            for (int i = 0; i < enum_type_param_count; i++) {
+                                free(enum_type_params[i]);
+                                if (enum_type_constraints && enum_type_constraints[i]) free(enum_type_constraints[i]);
+                            }
+                            free(enum_type_params); free(enum_type_constraints);
+                            free(name);
+                            return parser_recover(p);
+                        }
+                        payloads = resized;
+                        payloads[pcount++] = ptype;
+                    }
+                    if (p->current.type == TOKEN_COMMA) advance_p(p);
+                }
+                expect_p(p, TOKEN_RPAREN, "missing ')' after variant payloads");
+            }
             {
-                char** resized = realloc(variants, sizeof(char*) * (size_t)(variant_count + 1));
-                if (!resized) {
+                char** resized_v = realloc(variants, sizeof(char*) * (size_t)(variant_count + 1));
+                if (!resized_v) {
                     parser_error(p, "out of memory while growing enum variant list");
                     free(vname);
-                    for (int i = 0; i < variant_count; i++) free(variants[i]);
-                    free(variants); free(name);
+                    for (int j = 0; j < pcount; j++) free(payloads[j]);
+                    free(payloads);
+                    for (int i = 0; i < variant_count; i++) {
+                        free(variants[i]);
+                        if (payload_lists && payload_lists[i]) {
+                            for (int j2 = 0; j2 < payload_counts[i]; j2++) free(payload_lists[i][j2]);
+                            free(payload_lists[i]);
+                        }
+                    }
+                    free(variants); free(payload_lists); free(payload_counts);
+                    for (int i = 0; i < enum_type_param_count; i++) {
+                        free(enum_type_params[i]);
+                        if (enum_type_constraints && enum_type_constraints[i]) free(enum_type_constraints[i]);
+                    }
+                    free(enum_type_params); free(enum_type_constraints);
+                    free(name);
                     return parser_recover(p);
                 }
-                variants = resized;
-                variants[variant_count++] = vname;
+                variants = resized_v;
+                char*** resized_pl = realloc(payload_lists, sizeof(char**) * (size_t)(variant_count + 1));
+                if (!resized_pl) {
+                    parser_error(p, "out of memory while growing enum variant list");
+                    free(vname);
+                    for (int j = 0; j < pcount; j++) free(payloads[j]);
+                    free(payloads);
+                    for (int i = 0; i < variant_count; i++) {
+                        free(variants[i]);
+                        if (payload_lists && payload_lists[i]) {
+                            for (int j2 = 0; j2 < payload_counts[i]; j2++) free(payload_lists[i][j2]);
+                            free(payload_lists[i]);
+                        }
+                    }
+                    free(variants); free(payload_lists); free(payload_counts);
+                    for (int i = 0; i < enum_type_param_count; i++) {
+                        free(enum_type_params[i]);
+                        if (enum_type_constraints && enum_type_constraints[i]) free(enum_type_constraints[i]);
+                    }
+                    free(enum_type_params); free(enum_type_constraints);
+                    free(name);
+                    return parser_recover(p);
+                }
+                payload_lists = resized_pl;
+                int* resized_pc = realloc(payload_counts, sizeof(int) * (size_t)(variant_count + 1));
+                if (!resized_pc) {
+                    parser_error(p, "out of memory while growing enum variant list");
+                    free(vname);
+                    for (int j = 0; j < pcount; j++) free(payloads[j]);
+                    free(payloads);
+                    for (int i = 0; i < variant_count; i++) {
+                        free(variants[i]);
+                        if (payload_lists && payload_lists[i]) {
+                            for (int j2 = 0; j2 < payload_counts[i]; j2++) free(payload_lists[i][j2]);
+                            free(payload_lists[i]);
+                        }
+                    }
+                    free(variants); free(payload_lists); free(payload_counts);
+                    for (int i = 0; i < enum_type_param_count; i++) {
+                        free(enum_type_params[i]);
+                        if (enum_type_constraints && enum_type_constraints[i]) free(enum_type_constraints[i]);
+                    }
+                    free(enum_type_params); free(enum_type_constraints);
+                    free(name);
+                    return parser_recover(p);
+                }
+                payload_counts = resized_pc;
+                variants[variant_count] = vname;
+                payload_lists[variant_count] = payloads;
+                payload_counts[variant_count] = pcount;
+                variant_count++;
             }
             if (p->current.type == TOKEN_COMMA) advance_p(p);
             else if (p->current.type == TOKEN_SEMICOLON) advance_p(p);
         }
         expect_p(p, TOKEN_RBRACE, "missing '}' at end of enum body");
         if (p->current.type == TOKEN_SEMICOLON) advance_p(p);
-        ASTNode* node = (ASTNode*)ast_new_enum_decl(name, variants, variant_count, line, column);
-        for (int i = 0; i < variant_count; i++) free(variants[i]);
-        free(variants); free(name);
+        ASTNode* node = (ASTNode*)ast_new_enum_decl_full(name, variants, variant_count,
+                                                          payload_lists, payload_counts,
+                                                          enum_type_params, enum_type_constraints,
+                                                          enum_type_param_count,
+                                                          line, column);
+        for (int i = 0; i < variant_count; i++) {
+            free(variants[i]);
+            if (payload_lists && payload_lists[i]) {
+                for (int j = 0; j < payload_counts[i]; j++) free(payload_lists[i][j]);
+                free(payload_lists[i]);
+            }
+        }
+        free(variants); free(payload_lists); free(payload_counts);
+        for (int i = 0; i < enum_type_param_count; i++) {
+            free(enum_type_params[i]);
+            if (enum_type_constraints && enum_type_constraints[i]) free(enum_type_constraints[i]);
+        }
+        free(enum_type_params); free(enum_type_constraints);
+        free(name);
         return node;
     }
     else if (p->current.type == TOKEN_MATCH) {
@@ -1618,10 +1787,15 @@ ASTNode* parse_statement(Parser* p) {
         char** patterns = NULL;
         int* pattern_is_wildcard = NULL;
         ASTNode** bodies = NULL;
+        /* 2.6.0: optional payload-binding lists per arm (`Some(x) =>`). */
+        char*** bindings = NULL;
+        int* binding_counts = NULL;
         int arm_count = 0;
         while (p->current.type != TOKEN_RBRACE && p->current.type != TOKEN_EOF) {
             char* pat = NULL;
             int is_wild = 0;
+            char** binds = NULL;
+            int bcount = 0;
             if (p->current.type == TOKEN_IDENTIFIER) {
                 /* "_" is the wildcard pattern (we read it as an identifier
                  * since the lexer doesn't have a special token for it). */
@@ -1632,9 +1806,63 @@ ASTNode* parse_statement(Parser* p) {
                     pat = strdup(p->current.value);
                 }
                 eat_p(p, TOKEN_IDENTIFIER);
+                /* 2.6.0: optional payload-binding list — `Some(x, y)`.
+                 * Only meaningful for tagged-union enums; validated by
+                 * the semantic pass against the matched enum's variant. */
+                if (p->current.type == TOKEN_LPAREN) {
+                    advance_p(p);  /* consume '(' */
+                    while (p->current.type != TOKEN_RPAREN && p->current.type != TOKEN_EOF) {
+                        if (p->current.type != TOKEN_IDENTIFIER) {
+                            parser_error(p, "expected binding name in match pattern");
+                            free(pat);
+                            for (int j = 0; j < bcount; j++) free(binds[j]);
+                            free(binds);
+                            for (int i = 0; i < arm_count; i++) {
+                                free(patterns[i]); ast_free(bodies[i]);
+                                if (bindings && bindings[i]) {
+                                    for (int j2 = 0; j2 < binding_counts[i]; j2++) free(bindings[i][j2]);
+                                    free(bindings[i]);
+                                }
+                            }
+                            free(patterns); free(pattern_is_wildcard); free(bodies);
+                            free(bindings); free(binding_counts);
+                            ast_free(scrutinee);
+                            return parser_recover(p);
+                        }
+                        {
+                            char* b = strdup(p->current.value);
+                            char** resized = realloc(binds, sizeof(char*) * (size_t)(bcount + 1));
+                            if (!resized) {
+                                parser_error(p, "out of memory while growing pattern binding list");
+                                free(b);
+                                for (int j = 0; j < bcount; j++) free(binds[j]);
+                                free(binds);
+                                free(pat);
+                                for (int i = 0; i < arm_count; i++) {
+                                    free(patterns[i]); ast_free(bodies[i]);
+                                    if (bindings && bindings[i]) {
+                                        for (int j2 = 0; j2 < binding_counts[i]; j2++) free(bindings[i][j2]);
+                                        free(bindings[i]);
+                                    }
+                                }
+                                free(patterns); free(pattern_is_wildcard); free(bodies);
+                                free(bindings); free(binding_counts);
+                                ast_free(scrutinee);
+                                return parser_recover(p);
+                            }
+                            binds = resized;
+                            binds[bcount++] = b;
+                        }
+                        eat_p(p, TOKEN_IDENTIFIER);
+                        if (p->current.type == TOKEN_COMMA) advance_p(p);
+                    }
+                    expect_p(p, TOKEN_RPAREN, "missing ')' after pattern bindings");
+                }
             } else {
                 parser_error(p, "expected pattern (variant name or '_') in match arm");
                 free(pat);
+                for (int j = 0; j < bcount; j++) free(binds[j]);
+                free(binds);
                 for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
                 free(patterns); free(pattern_is_wildcard); free(bodies);
                 ast_free(scrutinee);
@@ -1652,6 +1880,8 @@ ASTNode* parse_statement(Parser* p) {
                 if (!p_r) {
                     parser_error(p, "out of memory while growing match arm list");
                     free(pat); ast_free(body);
+                    for (int j = 0; j < bcount; j++) free(binds[j]);
+                    free(binds);
                     for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
                     free(patterns); free(pattern_is_wildcard); free(bodies);
                     ast_free(scrutinee);
@@ -1664,6 +1894,8 @@ ASTNode* parse_statement(Parser* p) {
                 if (!w_r) {
                     parser_error(p, "out of memory while growing match arm list");
                     free(pat); ast_free(body);
+                    for (int j = 0; j < bcount; j++) free(binds[j]);
+                    free(binds);
                     for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
                     free(patterns); free(pattern_is_wildcard); free(bodies);
                     ast_free(scrutinee);
@@ -1676,6 +1908,8 @@ ASTNode* parse_statement(Parser* p) {
                 if (!b_r) {
                     parser_error(p, "out of memory while growing match arm list");
                     free(pat); ast_free(body);
+                    for (int j = 0; j < bcount; j++) free(binds[j]);
+                    free(binds);
                     for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
                     free(patterns); free(pattern_is_wildcard); free(bodies);
                     ast_free(scrutinee);
@@ -1683,17 +1917,55 @@ ASTNode* parse_statement(Parser* p) {
                 }
                 bodies = b_r;
             }
+            {
+                char*** bl_r = realloc(bindings, sizeof(char**) * (size_t)(arm_count + 1));
+                if (!bl_r) {
+                    parser_error(p, "out of memory while growing match arm list");
+                    free(pat); ast_free(body);
+                    for (int j = 0; j < bcount; j++) free(binds[j]);
+                    free(binds);
+                    for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
+                    free(patterns); free(pattern_is_wildcard); free(bodies);
+                    ast_free(scrutinee);
+                    return parser_recover(p);
+                }
+                bindings = bl_r;
+                int* bc_r = realloc(binding_counts, sizeof(int) * (size_t)(arm_count + 1));
+                if (!bc_r) {
+                    parser_error(p, "out of memory while growing match arm list");
+                    free(pat); ast_free(body);
+                    for (int j = 0; j < bcount; j++) free(binds[j]);
+                    free(binds);
+                    for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
+                    free(patterns); free(pattern_is_wildcard); free(bodies);
+                    free(bindings);
+                    ast_free(scrutinee);
+                    return parser_recover(p);
+                }
+                binding_counts = bc_r;
+            }
             patterns[arm_count] = pat;
             pattern_is_wildcard[arm_count] = is_wild;
             bodies[arm_count] = body;
+            bindings[arm_count] = binds;
+            binding_counts[arm_count] = bcount;
             arm_count++;
             if (p->current.type == TOKEN_COMMA) advance_p(p);
         }
         expect_p(p, TOKEN_RBRACE, "missing '}' at end of match body");
         if (p->current.type == TOKEN_SEMICOLON) advance_p(p);
-        ASTNode* node = (ASTNode*)ast_new_match_stmt(scrutinee, patterns, pattern_is_wildcard, bodies, arm_count, line, column);
-        for (int i = 0; i < arm_count; i++) free(patterns[i]);
+        ASTNode* node = (ASTNode*)ast_new_match_stmt_full(scrutinee, patterns, pattern_is_wildcard,
+                                                           bindings, binding_counts,
+                                                           bodies, arm_count, line, column);
+        for (int i = 0; i < arm_count; i++) {
+            free(patterns[i]);
+            if (bindings && bindings[i]) {
+                for (int j = 0; j < binding_counts[i]; j++) free(bindings[i][j]);
+                free(bindings[i]);
+            }
+        }
         free(patterns); free(pattern_is_wildcard); free(bodies);
+        free(bindings); free(binding_counts);
         return node;
     }
     else if (p->current.type == TOKEN_IDENTIFIER) {

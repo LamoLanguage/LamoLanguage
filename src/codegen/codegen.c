@@ -1086,14 +1086,28 @@ void generate_c_code(ASTNode* node, FILE* out) {
     fprintf(out, "atexit(lamo_arena_free_all);\n");
 
     /* Phase 2: initialize enum variant globals. Each variant gets its
-     * integer index as the value. */
+     * integer index as the value.
+     * 2.6.0: variants of TAGGED-union enums materialize as tagged values
+     * (lamo_make_enum) instead of plain ints — unit variants carry no
+     * payloads, payload variants are only produced by constructor calls
+     * and their globals exist solely so bare unit-variant identifiers
+     * (e.g. `None`) resolve. */
     current = ((ASTProgram*)node)->declarations;
     while (current) {
         if (current->type == AST_ENUM_DECL) {
             ASTEnumDecl* ed = (ASTEnumDecl*)current;
+            int tagged = 0;
+            for (int v = 0; v < ed->variant_count; v++) {
+                if (ed->variant_payload_counts && ed->variant_payload_counts[v] > 0) { tagged = 1; break; }
+            }
             for (int i = 0; i < ed->variant_count; i++) {
                 print_indent(out);
-                fprintf(out, "%s = lamo_make_int(%d);\n", user_name1(ed->variants[i]), i);
+                if (tagged) {
+                    fprintf(out, "%s = lamo_make_enum(%d, \"%s\", (LamoArray*)0);\n",
+                            user_name1(ed->variants[i]), i, ed->variants[i]);
+                } else {
+                    fprintf(out, "%s = lamo_make_int(%d);\n", user_name1(ed->variants[i]), i);
+                }
             }
         }
         current = current->next;
@@ -1646,8 +1660,87 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
              *   if (lamo_is_truthy(lamo_equal(s, Red))) body1
              *   else if (lamo_is_truthy(lamo_equal(s, Green))) body2
              *   else body3
-             * Wildcard arms become the trailing `else`. */
+             * Wildcard arms become the trailing `else`.
+             *
+             * 2.6.0: matches whose enum is a TAGGED union (the semantic
+             * pass stored its name in sema_enum_name) use a tag-compare
+             * desugar with a scrutinee temp so the value is evaluated
+             * once; payload bindings are pulled out of the temp with
+             * lamo_enum_payload (SPEC §4.6). */
             ASTMatchStmt* ms = (ASTMatchStmt*)node;
+            if (ms->sema_enum_name) {
+                ASTEnumDecl* ed = NULL;
+                for (ASTNode* cur = g_program_decls; cur; cur = cur->next) {
+                    if (cur->type == AST_ENUM_DECL) {
+                        ASTEnumDecl* cand = (ASTEnumDecl*)cur;
+                        if (cand->name && strcmp(cand->name, ms->sema_enum_name) == 0) { ed = cand; break; }
+                    }
+                }
+                if (ed) {
+                    print_indent(out);
+                    fprintf(out, "{\n");
+                    indent_level++;
+                    print_indent(out);
+                    fprintf(out, "LamoValue _lamo_match_scrut = ");
+                    generate_expression_code(ms->scrutinee, out);
+                    fprintf(out, ";\n");
+                    int has_emitted = 0;
+                    for (int i = 0; i < ms->arm_count; i++) {
+                        if (ms->pattern_is_wildcard[i]) {
+                            print_indent(out);
+                            fprintf(out, "else ");
+                            if (ms->bodies[i]) {
+                                generate_statement_code(ms->bodies[i], out);
+                            } else {
+                                fprintf(out, "{ }\n");
+                            }
+                            has_emitted = 1;
+                        } else {
+                            /* Resolve this arm's variant index. */
+                            int vidx = -1;
+                            for (int v = 0; v < ed->variant_count; v++) {
+                                if (ed->variants[v] && strcmp(ed->variants[v], ms->patterns[i]) == 0) { vidx = v; break; }
+                            }
+                            int bcount = ms->pattern_bindings ? ms->pattern_binding_counts[i] : 0;
+                            print_indent(out);
+                            if (has_emitted) fprintf(out, "else ");
+                            fprintf(out, "if (lamo_enum_tag_is(_lamo_match_scrut, %d)) ", vidx);
+                            if (bcount > 0) {
+                                /* Bind payloads in a C block scope. */
+                                fprintf(out, "{\n");
+                                indent_level++;
+                                for (int b = 0; b < bcount; b++) {
+                                    print_indent(out);
+                                    fprintf(out, "LamoValue %s = lamo_enum_payload(_lamo_match_scrut, %d);\n",
+                                            user_name1(ms->pattern_bindings[i][b]), b);
+                                    /* Suppress -Wunused-variable when the
+                                     * body doesn't read every binding. */
+                                    print_indent(out);
+                                    fprintf(out, "(void)%s;\n", user_name1(ms->pattern_bindings[i][b]));
+                                }
+                                if (ms->bodies[i]) {
+                                    generate_statement_code(ms->bodies[i], out);
+                                }
+                                indent_level--;
+                                print_indent(out);
+                                fprintf(out, "}\n");
+                            } else if (ms->bodies[i]) {
+                                generate_statement_code(ms->bodies[i], out);
+                            } else {
+                                fprintf(out, "{ }\n");
+                            }
+                            has_emitted = 1;
+                        }
+                    }
+                    indent_level--;
+                    print_indent(out);
+                    fprintf(out, "}\n");
+                    break;
+                }
+                /* Enum decl not found (shouldn't happen): fall through to
+                 * the legacy desugar below. */
+            }
+            {
             int has_emitted = 0;
             for (int i = 0; i < ms->arm_count; i++) {
                 if (ms->pattern_is_wildcard[i]) {
@@ -1673,6 +1766,7 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
                     }
                     has_emitted = 1;
                 }
+            }
             }
             break;
         }
@@ -1944,7 +2038,24 @@ static void generate_expression_code(ASTNode* node, FILE* out) {
         }
         case AST_CALL_EXPR: {
             ASTCallExpr* call_expr = (ASTCallExpr*)node;
-            if (is_lang_builtin(call_expr->name)) {
+            /* 2.6.0: enum variant constructor — `Some(42)` (SPEC §3.5).
+             * The semantic pass annotated the node (sema_enum_name +
+             * sema_variant_index); build the payload array and the tagged
+             * value with a GCC statement expression so the constructor
+             * works in any expression position. Checked FIRST so variant
+             * names resolve as constructors before user functions. */
+            if (call_expr->base.sema_enum_name) {
+                int payload_count = call_expr->arg_count;
+                fprintf(out, "({ LamoArray* _lamo_enum_pl = lamo_enum_payloads_alloc(%d); ",
+                        payload_count > 0 ? payload_count : 0);
+                for (int pi = 0; pi < payload_count; pi++) {
+                    fprintf(out, "_lamo_enum_pl->items[%d] = ", pi);
+                    generate_expression_code(call_expr->args[pi], out);
+                    fprintf(out, "; ");
+                }
+                fprintf(out, "lamo_make_enum(%d, \"%s\", _lamo_enum_pl); })",
+                        call_expr->base.sema_variant_index, call_expr->name);
+            } else if (is_lang_builtin(call_expr->name)) {
                 generate_lang_builtin_call_expr(call_expr->name, call_expr->args, call_expr->arg_count, out);
             } else if (is_gui_builtin(call_expr->name)) {
                 generate_gui_call_expr(call_expr->name, call_expr->args, call_expr->arg_count, out);

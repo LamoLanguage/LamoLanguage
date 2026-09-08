@@ -97,6 +97,13 @@ typedef struct ASTNode {
      * unknown/uneeded. Unlike sema_struct_name this can carry ANY type
      * including nested generics; see semantic.c::lamo_intern_type(). */
     const char* sema_full_type;
+    /* 2.6.0 tagged-union enums: when this AST_CALL_EXPR node is an enum
+     * variant constructor (`Some(42)`), the semantic pass stores the
+     * owning enum's name (borrowed from the ASTEnumDecl, NOT owned) and
+     * the variant's index. codegen reads both to emit lamo_make_enum.
+     * sema_enum_name NULL means the call is a regular function call. */
+    const char* sema_enum_name;
+    int sema_variant_index;
 } ASTNode;
 
 typedef struct {
@@ -344,26 +351,60 @@ typedef struct {
 /* Phase 2: enum declaration.
  *   enum Color { Red; Green; Blue; }
  * variants[i] is owned (strdup'd). At runtime each variant is an int
- * constant equal to its index. */
+ * constant equal to its index.
+ *
+ * 2.6.0 tagged unions (SPEC §3.5):
+ *   enum Option<T> {
+ *       Some(T),      // payload variant
+ *       None          // unit variant
+ *   }
+ * variant_payloads[v] is a malloc'd array of variant_payload_counts[v]
+ * strdup'd type annotations (NULL entries allowed = unannotated), or
+ * NULL itself for unit variants. variant_payload_counts[v] == 0 means
+ * the variant carries no payload. An enum is "tagged" when ANY variant
+ * carries a payload; tagged enums materialize as LamoValue
+ * LAMO_VALUE_ENUM at runtime, while legacy untagged enums keep the
+ * plain int-constant representation.
+ * type_params / type_param_count / type_param_constraints mirror
+ * ASTStructDecl's generic machinery (payloads may reference the enum's
+ * own type parameters). */
 typedef struct {
     ASTNode base;
     char* name;
     char** variants;
     int variant_count;
+    char*** variant_payloads;
+    int* variant_payload_counts;
+    char** type_params;
+    char** type_param_constraints;
+    int type_param_count;
 } ASTEnumDecl;
 
 /* Phase 2: match statement.
  *   match color { Red => print("red"); _ => print("other"); }
  * patterns[i] is the variant name (or "_" for wildcard), strdup'd.
  * pattern_is_wildcard[i] is 1 for "_", 0 otherwise.
- * bodies[i] is a statement node (owned). */
+ * bodies[i] is a statement node (owned).
+ *
+ * 2.6.0: payload bindings — `Some(x, y) => ...`. pattern_bindings[a]
+ * is a malloc'd array of pattern_binding_counts[a] strdup'd binding
+ * names (NULL when the arm has no parens). For arms matching a
+ * tagged-union enum variant, the binding count must equal the
+ * variant's payload count (validated in the semantic pass); each
+ * binding is defined as a read-only local over the arm body.
+ * sema_enum_name is set by the semantic pass when the matched enum is
+ * a tagged union (borrowed pointer into the ASTEnumDecl->name; the
+ * codegen uses it to switch to the tag-compare desugar). */
 typedef struct {
     ASTNode base;
     struct ASTNode* scrutinee;
     char** patterns;
     int* pattern_is_wildcard;
+    char*** pattern_bindings;
+    int* pattern_binding_counts;
     struct ASTNode** bodies;
     int arm_count;
+    const char* sema_enum_name;
 } ASTMatchStmt;
 
 /* Phase 2: struct literal.
@@ -494,7 +535,18 @@ ASTNode* ast_new_impl_decl_generic(char* struct_name,
                                    ASTNode* methods, int line, int column);
 
 /* enum Name { Variant, ... } - `variants` is an array of strings, strdup'd
- * here. The caller retains ownership of the input array. */
+ * here. The caller retains ownership of the input array.
+ *
+ * 2.6.0: the extended form also takes per-variant payload type lists.
+ * variant_payloads[v] may be NULL (unit variant); otherwise it is an
+ * array of variant_payload_counts[v] strings which are strdup'd here
+ * (NULL entries allowed). type_params/type_param_constraints may be
+ * NULL when type_param_count == 0. See ASTEnumDecl. */
+ASTNode* ast_new_enum_decl_full(char* name, char** variants, int variant_count,
+                                char*** variant_payloads, int* variant_payload_counts,
+                                char** type_params, char** type_param_constraints, int type_param_count,
+                                int line, int column);
+/* Legacy wrapper: plain (untagged) enum, no payloads, no type params. */
 ASTNode* ast_new_enum_decl(char* name, char** variants, int variant_count, int line, int column);
 
 /* match expr { Pat => body, ... }
@@ -502,7 +554,16 @@ ASTNode* ast_new_enum_decl(char* name, char** variants, int variant_count, int l
  * `pattern_is_wildcard` is an array of 0/1 (1 = wildcard "_").
  * `bodies` is an array of ASTNode* (we take ownership). All arrays have
  * arm_count entries. The caller retains ownership of the input arrays
- * (we copy/stread what we need). */
+ * (we copy/stread what we need).
+ *
+ * 2.6.0: pattern_bindings / pattern_binding_counts carry the optional
+ * payload-binding lists (`Some(x) => ...`). pattern_bindings[a] may be
+ * NULL (no parens on that arm); entries are strdup'd here. Pass NULL
+ * for the plain no-binding form. */
+ASTNode* ast_new_match_stmt_full(ASTNode* scrutinee, char** patterns, int* pattern_is_wildcard,
+                                 char*** pattern_bindings, int* pattern_binding_counts,
+                                 ASTNode** bodies, int arm_count, int line, int column);
+/* Legacy wrapper: no payload bindings on any arm. */
 ASTNode* ast_new_match_stmt(ASTNode* scrutinee, char** patterns, int* pattern_is_wildcard, ASTNode** bodies, int arm_count, int line, int column);
 
 /* Struct literal: Name { field: value, ... }
