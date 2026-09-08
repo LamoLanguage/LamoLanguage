@@ -55,6 +55,21 @@ char* eval_value_to_string(EvalValue v) {
     return strdup("");
 }
 
+/* 2.6.0 (FU5): build the loader's renamed module symbol for a member —
+ * `lamo_mod_<alias>__<name>` (see src/cli/import_resolver.c). The
+ * interpreter resolves module member calls / qualified globals by this
+ * name: the aggregate program (already loaded for eval) defines module
+ * functions under exactly these names. Returns a static-ring buffer
+ * pointer (4 slots, same convention as the codegen's user_name1). */
+static const char* eval_module_prefixed_name(const char* alias, const char* member) {
+    static char bufs[4][256];
+    static int ring = 0;
+    char* out = bufs[ring];
+    ring = (ring + 1) & 3;
+    snprintf(out, sizeof(bufs[0]), "lamo_mod_%s__%s", alias ? alias : "", member ? member : "");
+    return out;
+}
+
 /* ── Environment ─────────────────────────────────────────────────────── */
 
 typedef struct EvalBinding {
@@ -385,42 +400,63 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
 
         case AST_PROP_EXPR: {
             ASTPropExpr* pe = (ASTPropExpr*)node;
-            /* Sprint 4: if object is an identifier, this might be a
-             * module-qualified access (`math.PI`) from an aliased import.
-             * The eval/REPL path does not load modules through the
-             * CompilationState pipeline, so it has no module registry
-             * and cannot resolve these. Emit a clear error instead of
-             * the confusing "undefined variable 'math'" that would
-             * otherwise surface from eval_expression trying to look up
-             * the alias as a regular variable. */
+            EvalValue obj;
+            /* 2.6.0 (FU5): module-qualified global access (`math.PI`) —
+             * the loader renamed module globals to lamo_mod_<alias>__<name>
+             * and the aggregate program defines them in the env. Resolve
+             * through the prefixed name before falling back to errors. */
             if (pe->object && pe->object->type == AST_IDENTIFIER) {
-                RUNTIME_ERROR("module-qualified access `%s.%s` is not supported in eval/REPL mode (use `lamo run` instead)",
-                              ((ASTIdentifier*)pe->object)->name, pe->prop_name);
-                *sig = EVAL_SIG_ERROR;
-                return eval_error();
+                const char* prefixed = eval_module_prefixed_name(
+                    ((ASTIdentifier*)pe->object)->name, pe->prop_name);
+                if (eval_env_get(env, prefixed, &obj)) {
+                    return obj;
+                }
             }
-            EvalValue obj = eval_expression(pe->object, env, sig);
+            obj = eval_expression(pe->object, env, sig);
             if (*sig != EVAL_SIG_NONE) return obj;
             if (obj.type == EVAL_VAL_STRING && strcmp(pe->prop_name, "len") == 0) {
                 long long len = (long long)strlen(obj.as.s);
                 eval_value_free(obj);
                 return eval_int(len);
             }
-            RUNTIME_ERROR("unknown property '%s'", pe->prop_name);
+            if (pe->object && pe->object->type == AST_IDENTIFIER) {
+                RUNTIME_ERROR("unknown module member or variable `%s.%s` (import the module first, e.g. `import %s.lamo as %s`)",
+                              ((ASTIdentifier*)pe->object)->name, pe->prop_name,
+                              ((ASTIdentifier*)pe->object)->name, ((ASTIdentifier*)pe->object)->name);
+            } else {
+                RUNTIME_ERROR("unknown property '%s'", pe->prop_name);
+            }
             eval_value_free(obj);
             *sig = EVAL_SIG_ERROR;
             return eval_error();
         }
 
         case AST_MEMBER_CALL: {
-            /* Sprint 4: `module.member(args)` — not supported in
-             * eval/REPL because there's no module registry. Emit a
-             * clear error pointing the user at `lamo run`. */
+            /* 2.6.0 (FU5): module member calls now WORK in eval/REPL.
+             * The loader (used by `lamo eval file.lamo` and by the REPL
+             * import loader) renames module functions to
+             * `lamo_mod_<alias>__<name>` and defines them in the env, so
+             * the call is routed through the prefixed name. Generic type
+             * arguments are erased, matching the C backend. */
             ASTMemberCall* mc = (ASTMemberCall*)node;
-            const char* alias = (mc->object && mc->object->type == AST_IDENTIFIER)
-                ? ((ASTIdentifier*)mc->object)->name : "<expr>";
-            RUNTIME_ERROR("module member call `%s.%s(...)` is not supported in eval/REPL mode (use `lamo run` instead)",
-                          alias, mc->member_name);
+            if (mc->object && mc->object->type == AST_IDENTIFIER) {
+                const char* alias = ((ASTIdentifier*)mc->object)->name;
+                const char* prefixed = eval_module_prefixed_name(alias, mc->member_name);
+                EvalEnv* closure = NULL;
+                if (eval_env_find_fn(env, prefixed, &closure)) {
+                    return eval_call(prefixed, mc->args, mc->arg_count, env, sig, node->line);
+                }
+                RUNTIME_ERROR("unknown module member `%s.%s` (did you import it? e.g. `import \"%s.lamo\" as %s;`)",
+                              alias, mc->member_name, alias, alias);
+                *sig = EVAL_SIG_ERROR;
+                return eval_error();
+            }
+            {
+                const char* alias = (mc->object && mc->object->type == AST_IDENTIFIER)
+                    ? ((ASTIdentifier*)mc->object)->name : "<expr>";
+                RUNTIME_ERROR("module member call `%s.%s(...)` requires an identifier receiver in eval/REPL mode",
+                              alias, mc->member_name);
+            }
             *sig = EVAL_SIG_ERROR;
             return eval_error();
         }
@@ -702,14 +738,26 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
         }
 
         case AST_MEMBER_CALL: {
-            /* Sprint 4: same as the expression case — emit a clear
-             * error rather than trying to look up the alias as a
-             * variable. */
+            /* 2.6.0 (FU5): statement-position module member calls work in
+             * eval/REPL — same prefixed-name routing as the expression
+             * case. */
             ASTMemberCall* mc = (ASTMemberCall*)node;
-            const char* alias = (mc->object && mc->object->type == AST_IDENTIFIER)
-                ? ((ASTIdentifier*)mc->object)->name : "<expr>";
-            RUNTIME_ERROR("module member call `%s.%s(...)` is not supported in eval/REPL mode (use `lamo run` instead)",
-                          alias, mc->member_name);
+            if (mc->object && mc->object->type == AST_IDENTIFIER) {
+                const char* alias = ((ASTIdentifier*)mc->object)->name;
+                const char* prefixed = eval_module_prefixed_name(alias, mc->member_name);
+                EvalEnv* closure = NULL;
+                if (eval_env_find_fn(env, prefixed, &closure)) {
+                    EvalValue result = eval_call(prefixed, mc->args, mc->arg_count, env, sig, node->line);
+                    eval_value_free(result);
+                    return eval_void();
+                }
+            }
+            {
+                const char* alias = (mc->object && mc->object->type == AST_IDENTIFIER)
+                    ? ((ASTIdentifier*)mc->object)->name : "<expr>";
+                RUNTIME_ERROR("unknown module member `%s.%s` (did you import it? e.g. `import \"%s.lamo\" as %s;`)",
+                              alias, mc->member_name, alias, alias);
+            }
             *sig = EVAL_SIG_ERROR;
             return eval_error();
         }
@@ -827,6 +875,29 @@ int eval_program(ASTProgram* program, EvalEnv* env) {
         eval_value_free(result);
         if (sig == EVAL_SIG_ERROR) return 0;
         if (sig == EVAL_SIG_RETURN) break; /* top-level return exits program */
+    }
+    return 1;
+}
+
+/* 2.6.0 (FU5): load an already-loaded + renamed module program into the
+ * REPL environment (SPEC §10.7). Functions are registered under their
+ * (prefixed) names; top-level lets execute so module globals exist.
+ * Imports inside the module were resolved by the caller's loader pass.
+ * Returns 0 on a module-level runtime error, 1 on success. */
+int eval_load_module_program(ASTProgram* program, EvalEnv* env) {
+    for (ASTNode* n = program->declarations; n; n = n->next) {
+        if (n->type == AST_FN_DECL) {
+            ASTFnDecl* fn = (ASTFnDecl*)n;
+            eval_env_define_fn(env, fn->name, fn, env);
+        }
+    }
+    for (ASTNode* n = program->declarations; n; n = n->next) {
+        if (n->type == AST_FN_DECL) continue; /* registered above */
+        if (n->type == AST_IMPORT) continue;  /* resolved by the loader */
+        EvalSignal sig = EVAL_SIG_NONE;
+        EvalValue result = eval_statement(n, env, &sig);
+        eval_value_free(result);
+        if (sig == EVAL_SIG_ERROR) return 0;
     }
     return 1;
 }

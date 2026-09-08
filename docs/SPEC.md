@@ -1015,6 +1015,23 @@ import math as m     // sugar for: import "math.lamo" as m
 Resolves `math` to `math.lamo` in the importing file's directory. Otherwise
 identical to §10.2.
 
+**Folder-based modules (2.6.0):** when the direct file does not exist, the
+loader falls back to a folder with a `mod.lamo` entry point:
+
+```
+myproject/
+    main.lamo          // import utils
+    utils/
+        mod.lamo       // <- resolved when utils.lamo does not exist
+        helpers.lamo   // imported by mod.lamo, merged into the global scope
+```
+
+`import "utils"` (string form) and `import utils` (bare form) both try
+`utils.lamo` first, then `utils/mod.lamo`. The fallback never changes
+resolution when the primary path exists, so existing projects are
+unaffected. Declaration of the module alias is unchanged (`import utils`
+exposes the folder's members under the `utils` alias).
+
 ### 10.4 Standard library imports
 
 ```lamo
@@ -1052,12 +1069,23 @@ next to their program.
 - Duplicate top-level symbol names across files produce a compile-time error
   with the file path of the previous declaration.
 
+**Decision table (2.6.0, formalized):**
+
+| Situation | Behavior |
+|-----------|----------|
+| same file, same alias (or no alias) re-imported | no-op + `duplicate import ignored` warning |
+| same file, different alias re-imported | no-op + warning; first alias wins |
+| different files, same alias | **compile error** (`failed to register module alias`) — two namespaces under one name are ambiguous |
+| same file imported through different relative paths | deduped by normalized absolute path — one load, one warning |
+| import cycle (a → b → a) | compile error with the cycle stack |
+| duplicate top-level symbol across merged files | compile error naming both declaration sites |
+
 ### 10.6 Visibility
 
-**Decision (Phase 10):** today, every top-level declaration of a module is
-public THROUGH ITS NAMESPACE; unaliased (legacy) merges place everything into
-the global namespace where normal duplicate-declaration errors apply.
-Rationale recorded here so the eventual upgrade path is mechanical:
+**Decision (Phase 10):** every top-level declaration of a module is public
+THROUGH ITS NAMESPACE; unaliased (legacy) merges place everything into the
+global namespace where normal duplicate-declaration errors apply. Rationale
+recorded here so the upgrade path stays mechanical:
 
 1. aliased imports are already the de-facto privacy boundary (nothing outside
    the module can reach it without the alias),
@@ -1066,52 +1094,90 @@ Rationale recorded here so the eventual upgrade path is mechanical:
 3. two-step plan when introduced: warn on non-`pub` declarations reachable
    via aliases for one release, then enforce.
 
+**Step 1 LANDED (2.6.0):** the `pub` export marker exists. It is a CONTEXTUAL
+keyword (never reserved — `let pub = 5` still parses) accepted at top level
+in front of `fn`, `let`, `struct`, `impl`, and `enum`:
+
+```lamo
+pub fn visible(x: int) -> int { return x }
+fn helper(x: int) -> int { return x }   // implicitly private in a future release
+```
+
+Semantics in 2.6.0:
+
+- `pub` declarations and non-`pub` declarations BOTH export through their
+  module's namespace. No program changes meaning (step 1 of the plan).
+- Reaching a NON-`pub` member through an alias (`lib.helper()`, or reading
+  `lib.CONST`) compiles and runs, but emits a one-time-per-member warning:
+  `member 'helper' of module 'lib' is not marked 'pub'; it will become
+  private in a future release — add 'pub' to export it explicitly`.
+- Members marked `pub` never warn. The warning is recorded per member in
+  the module registry, so it fires at the FIRST use, not on every line.
+- Step 2 (future release): non-`pub` members become unresolvable through
+  aliases; the warning becomes an error. The migration is then strictly
+  mechanical: add `pub` where the warning points.
+
 **Project/package layout conventions (Phase 10 decision):** a Lamo project
 is any directory containing `lamo.pkg`; `lamo new` scaffolds
 `main.lamo` + `lamo.pkg` + `.gitignore` (which includes `lamo_exec.c`).
 Local packages live under `src/<name>.lamo` or nested directories resolved
-relative to the importing file; published dependency layout and lockfile
-semantics live with lampm (`src/lampm/`). Generator artifacts (`lamo_exec.c`,
-binaries) are never committed.
+relative to the importing file (§10.3's folder-module form applies);
+published dependency layout and lockfile semantics live with lampm
+(`src/lampm/`). Generator artifacts (`lamo_exec.c`, binaries) are never
+committed.
 
 ### 10.7 Execution modes: `run` vs `eval`/`repl`
 
-Lamo has two distinct execution paths with **different module-loading
-capabilities**. This is a deliberate design decision, not a bug, and is
-formalized here so users know which mode to use for which workload.
+Lamo has two distinct execution paths. Since 2.6.0 they share the same
+module-loading semantics (see the table below); what differs is the
+backend and the performance/feedback tradeoff.
 
 | Mode        | Backend              | Module imports (`import "..." as alias;`) | Speed     | Use case |
 |-------------|----------------------|-------------------------------------------|-----------|----------|
 | `lamo run`  | Transpiles to C, GCC | Full `LamoModuleRegistry` support         | Native    | Programs that use namespaced imports (`math.sqrt(x)`, `fs.readText(path)`, …) and want maximum performance. |
 | `lamo build`| Same as `run`, but stops after producing the binary | Full support | Native | Producing a distributable binary. |
 | `lamo check`| Frontend only (lexer + parser + semantic) | Resolves imports for type/arity checking | Fast | CI / pre-commit validation. |
-| `lamo eval` | Built-in tree-walking interpreter (`src/eval/eval.c`) | **No module registry** — `alias.member(args)` calls fail with a clear error pointing the user at `lamo run` | Slower (no GCC, no optimization) | Quick expression evaluation, REPL one-liners, debugging small snippets without the C-compile step. |
-| `lamo repl` | Same interpreter as `eval`, interactive | **No module registry** (same as `eval`) | Slower | Interactive development. |
+| `lamo eval` | Built-in tree-walking interpreter (`src/eval/eval.c`) | **Loaded through the same loader as `run`** (2.6.0) — member calls and qualified globals resolve | Slower (no GCC, no optimization) | Quick evaluation, debugging small snippets without the C-compile step. |
+| `lamo repl` | Same interpreter as `eval`, interactive | **Import statements load modules** (2.6.0) — type `import std.io` at the prompt | Slower | Interactive development. |
 
-**Decision (formalized):** `eval`/`repl` and `run` are **distinct paths
-with distinct purposes**. The interpreter path (`eval`/`repl`) is
-optimized for fast feedback (no GCC invocation) and does NOT load
-modules through the `LamoModuleRegistry`. Calling `math.sqrt(x)` in
-`eval`/`repl` produces a clear error:
+**Decision (revised 2.6.0):** `eval`/`repl` and `run` remain distinct
+paths with distinct purposes (the interpreter trades peak performance for
+fast feedback — no GCC invocation), but they no longer diverge on module
+loading, which had become the single biggest workflow gap between them:
 
-```
-error: module member 'math.sqrt' is not available in eval/repl mode
-hint: use `lamo run` to execute programs that use namespaced imports
-```
+- `lamo eval file.lamo` already ran the full recursive loader (path
+  resolution, cycle detection, duplicate-import rules) before executing;
+  the interpreter now RESOLVES `alias.member(args)` calls and
+  `alias.CONST` reads by routing them to the loader-renamed declarations
+  (`lamo_mod_<alias>__<name>`) that the loaded program already defines.
+- `lamo repl` accepts `import` statements at the prompt. Each import runs
+  the same loader pass, registers the module under its alias, and makes
+  its members callable for the rest of the session.
+- Generic type arguments on module calls are erased in eval, exactly as
+  in the C backend.
+- What eval/repl still do NOT support: the full struct/array value model
+  and `match` (pre-existing interpreter limitations, unchanged in 2.6.0).
+  Programs using those need `lamo run`.
 
-Bringing the interpreter path to full parity with `run` (loading
-modules, supporting namespaced calls) would require either (a)
-implementing the module registry in the interpreter, or (b) compiling
-every `eval`/`repl` input through the full `run` pipeline. Both options
-sacrifice the "fast feedback" property that justifies having a separate
-interpreter. We chose instead to make the limitation explicit and
-documented.
+The old `"module member 'math.sqrt' is not available in eval/repl mode"
+error no longer exists. If a snippet uses constructs the interpreter
+does not model (structs, match), eval says so at the runtime-error site
+as before.
 
-**Migrating from `eval` to `run`:** if a snippet works in `eval` but
-needs namespaced imports, save it to a `.lamo` file and run it with
-`lamo run file.lamo`. The language semantics are otherwise identical
-between the two paths — the interpreter implements the same value
-model, truthiness rules, and runtime errors as the transpiler.
+**Decision (revised 2.6.0):** `eval`/`repl` and `run` are distinct paths
+with distinct purposes — fast feedback vs native performance — and now
+share module-loading semantics (see the table above). The pre-2.6 limitation
+(`"module member 'math.sqrt' is not available in eval/repl mode"`) was
+removed by routing interpreter member calls through the same renamed
+declarations the loader produces; no registry was duplicated and no GCC
+step was added.
+
+**Migrating from `eval` to `run`:** if a snippet uses constructs the
+interpreter does not model (structs, arrays, match), save it to a `.lamo`
+file and run it with `lamo run file.lamo`. The language semantics are
+otherwise identical between the two paths — the interpreter implements
+the same value model, truthiness rules, and runtime errors as the
+transpiler.
 
 ---
 
@@ -1169,13 +1235,27 @@ The entry point is the implicit `main()` synthesized by the codegen. It:
 1. Initializes the string arena, the GC heap list, and the GC root stack.
 2. Registers every global `LamoValue` (top-level `let`s) as a GC root.
 3. Runs all top-level `let` initializers in declaration order.
-4. Calls user `fn main()` if defined; otherwise runs top-level statements in
-   order.
+4. Calls the ENTRY file's `fn main()` if defined; otherwise (and then)
+   runs top-level statements in order. Precisely: top-level statements
+   run first, and the entry file's zero-argument `fn main()` is invoked
+   after them — unless the program already contains an explicit
+   top-level `main()` call statement, in which case the implicit call is
+   suppressed (pre-2.6 programs relied on explicit calls; they keep
+   their exact behavior).
 5. Pops all GC roots and cleans up the string arena via `atexit`.
 
-There is no required `fn main()` today. Top-level statements run directly.
-Defining `fn main()` is supported but optional — if present, it is called
-after top-level initialization.
+There is no required `fn main()`. Top-level statements run directly.
+Defining `fn main()` is optional — when the entry file defines a
+zero-argument `fn main()`, it is called as described above.
+
+**Entry-file vs library-file expectation (2.6.0):** only the ENTRY file's
+`fn main()` is invoked. A `fn main` in an IMPORTED file never runs:
+aliased imports rename it (`lamo_mod_<alias>__main`), and unaliased
+merges trigger a loader warning — `imported file "..." defines 'fn
+main'; it will not run — only the entry file's main() is called`. A
+`fn main` with parameters defined in the entry file is ignored by the
+entry-point machinery (and flagged by normal type checks if it is
+never called manually).
 
 ### 12.2 Integer overflow
 

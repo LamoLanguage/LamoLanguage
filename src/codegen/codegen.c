@@ -69,8 +69,59 @@ static LamoModuleRegistry* g_module_registry = NULL;
  * and look up field indices. NULL outside of generate_c_code(). */
 static ASTNode* g_program_decls = NULL;
 
+/* 2.6.0 (FU5): the entry file's normalized path, set via
+ * codegen_set_entry_file(). Used to decide whether `fn main()` in the
+ * aggregate program belongs to the ENTRY file (and must be called from
+ * the C entry point) or to an imported library file (renamed or merged
+ * — never invoked). NULL disables the call entirely (REPL codegen). */
+static const char* g_entry_file = NULL;
+
 void codegen_set_module_registry(LamoModuleRegistry* reg) {
     g_module_registry = reg;
+}
+
+/* 2.6.0 (FU5): record the entry file so the C entry point calls the
+ * entry file's fn main() (SPEC §12.1). The path must be the normalized
+ * path the loader assigned to the entry AST's nodes. Pass NULL to
+ * disable (no fn main call in the generated main). */
+void codegen_set_entry_file(const char* entry_path) {
+    g_entry_file = entry_path;
+}
+
+/* Find the entry file's user main (name == "main", zero params, defined
+ * in the entry file). Returns the decl or NULL. */
+static ASTFnDecl* find_entry_main(ASTNode* declarations) {
+    ASTNode* cur;
+    if (!g_entry_file) return NULL;
+    for (cur = declarations; cur; cur = cur->next) {
+        if (cur->type == AST_FN_DECL) {
+            ASTFnDecl* fn = (ASTFnDecl*)cur;
+            if (fn->name && strcmp(fn->name, "main") == 0 &&
+                fn->param_count == 0) {
+                if (fn->base.file_path && strcmp(fn->base.file_path, g_entry_file) == 0) {
+                    return fn;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+/* 2.6.0 (FU5): back-compat guard. Pre-2.6 programs had to call main()
+ * explicitly as a top-level statement (the implicit call was missing).
+ * When such an explicit top-level `main(...)` call statement exists,
+ * the implicit call is suppressed so the function runs exactly once —
+ * old programs keep their exact behavior, new programs (no explicit
+ * call) get the SPEC §12.1 semantics. */
+static int program_has_explicit_main_call(ASTNode* declarations) {
+    ASTNode* cur;
+    for (cur = declarations; cur; cur = cur->next) {
+        if (cur->type == AST_CALL_STMT) {
+            ASTCallStmt* cs = (ASTCallStmt*)cur;
+            if (cs->name && strcmp(cs->name, "main") == 0) return 1;
+        }
+    }
+    return 0;
 }
 
 static void print_indent(FILE* out) {
@@ -1146,6 +1197,21 @@ void generate_c_code(ASTNode* node, FILE* out) {
             generate_statement_code(current, out);
         }
         current = current->next;
+    }
+
+    /* 2.6.0 (FU5): SPEC §12.1 — "Calls user fn main() if defined".
+     * The entry file's zero-argument fn main() runs AFTER top-level
+     * initialization and statements. Before this fix the generated
+     * lamo_u_main was emitted but never invoked, so `lamo run` on the
+     * README's hello world printed nothing. main() defined in an
+     * IMPORTED file is never called (it is renamed for aliased imports;
+     * the loader warns for unaliased merges). Suppressed when the
+     * program already calls main() explicitly at the top level
+     * (pre-2.6 workaround — see program_has_explicit_main_call). */
+    if (find_entry_main(((ASTProgram*)node)->declarations) &&
+        !program_has_explicit_main_call(((ASTProgram*)node)->declarations)) {
+        print_indent(out);
+        fprintf(out, "lamo_u_main();\n");
     }
 
     /* GC Step 3: pop all roots (globals + any nested locals from top-level

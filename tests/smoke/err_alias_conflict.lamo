@@ -1,0 +1,2 @@
+import "fixtures/dup_a.lamo" as m
+import "fixtures/dup_b.lamo" as m

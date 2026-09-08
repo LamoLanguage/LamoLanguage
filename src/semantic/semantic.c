@@ -7,6 +7,7 @@
 #include "../error_util.h"
 #include "semantic.h"
 #include "lexer.h"
+#include "../modules.h"
 
 // ---------------------------------------------------------------------------
 // Type model used by the semantic analyzer.
@@ -138,6 +139,10 @@ typedef struct {
     LamoModuleResolveFn module_resolve;
     LamoModuleArityFn module_arity;
     void* module_user_data;
+    /* 2.6.0 (FU5): direct registry handle for the §10.6 export-marker
+     * warnings. May be NULL (then no pub warnings are emitted). Not
+     * owned — lives in CompilationState. */
+    struct LamoModuleRegistry* module_registry;
     /* Return-type tracking: set when entering a function body so that
      * AST_RETURN_STMT can validate the returned expression against the
      * declared (or inferred) return type. LAMO_TYPE_UNKNOWN means either
@@ -200,6 +205,11 @@ static void semantic_error_at_hint(SemanticContext* ctx, int line, int column,
 static int builtin_function_arity(const char* name);
 static LamoType builtin_function_return_type(const char* name, ASTNode** args, int arg_count);
 static int semantic_validate_builtin_call(SemanticContext* ctx, const char* name, ASTNode** args, int arg_count, int line, int column);
+/* 2.6.0 (FU5): §10.6 step-1 export warning — defined near the bottom of
+ * this file; called from the AST_MEMBER_CALL / AST_PROP_EXPR paths. */
+static void semantic_warn_module_export(SemanticContext* ctx,
+                                        const char* alias, const char* member,
+                                        int line, int column);
 
 static const char* type_name(LamoType type) {
     switch (type) {
@@ -2852,6 +2862,9 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
                             semantic_error_at(ctx, node->line, node->column, message);
                         }
                     }
+                    /* 2.6.0 (FU5): §10.6 step-1 export warning. */
+                    semantic_warn_module_export(ctx, alias, mc->member_name,
+                                                node->line, node->column);
                 }
             }
             if (resolved_module_call) {
@@ -3113,6 +3126,9 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
             if (pe->object && pe->object->type == AST_IDENTIFIER) {
                 const char* alias = ((ASTIdentifier*)pe->object)->name;
                 if (ctx->module_resolve && ctx->module_resolve(alias, pe->prop_name, ctx->module_user_data)) {
+                    /* 2.6.0 (FU5): §10.6 step-1 export warning. */
+                    semantic_warn_module_export(ctx, alias, pe->prop_name,
+                                                node->line, node->column);
                     /* It's a module variable. Mark the node so codegen can
                      * find the alias without re-doing the lookup. We store
                      * the alias on sema_struct_name (a string ptr field
@@ -3316,7 +3332,29 @@ int semantic_analyze_with_source_lookup(ASTProgram* program, const char* file_pa
     /* Delegate to the full entry point with NULL module callbacks —
      * keeps the Sprint 3 signature compatible. */
     return semantic_analyze_full(program, file_path, lookup, user_data,
-                                  NULL, NULL, NULL);
+                                  NULL, NULL, NULL, NULL);
+}
+
+/* 2.6.0 (FU5): §10.6 explicit-export two-step rollout — STEP 1.
+ * Non-pub members reached through a module alias still compile and run,
+ * but warn ONCE per member so codebases can add explicit `pub` before a
+ * future release enforces the boundary (step 2). */
+static void semantic_warn_module_export(SemanticContext* ctx,
+                                        const char* alias, const char* member,
+                                        int line, int column) {
+    LamoModuleMember* mem;
+    if (!ctx->module_registry || !alias || !member) return;
+    mem = lamo_modules_find_member(ctx->module_registry, alias, member);
+    if (!mem || mem->is_pub || mem->warned_not_pub) return;
+    mem->warned_not_pub = 1;
+    {
+        char message[300];
+        snprintf(message, sizeof(message),
+                 "member '%s' of module '%s' is not marked 'pub'; "
+                 "it will become private in a future release — add 'pub' to export it explicitly",
+                 member, alias);
+        semantic_warn_at(ctx, line, column, message);
+    }
 }
 
 /* Sprint 4: full entry point with module-resolution callbacks. The
@@ -3326,7 +3364,8 @@ int semantic_analyze_full(ASTProgram* program, const char* file_path,
                           LamoSourceLookupFn src_lookup, void* src_user_data,
                           LamoModuleResolveFn mod_resolve,
                           LamoModuleArityFn mod_arity,
-                          void* mod_user_data) {
+                          void* mod_user_data,
+                          struct LamoModuleRegistry* mod_registry) {
     SemanticContext ctx;
     ctx.file_path = file_path;
     ctx.last_node_path = NULL;  // Bug #5 fix: preenchido por node->file_path
@@ -3343,6 +3382,7 @@ int semantic_analyze_full(ASTProgram* program, const char* file_path,
     ctx.module_resolve = mod_resolve;
     ctx.module_arity = mod_arity;
     ctx.module_user_data = mod_user_data;
+    ctx.module_registry = mod_registry;
     /* Return-type tracking: UNKNOWN at top level (not inside any function). */
     ctx.current_fn_return_type = LAMO_TYPE_UNKNOWN;
     ctx.current_fn_name = NULL;

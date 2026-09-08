@@ -2437,14 +2437,61 @@ ASTNode* parse_statement(Parser* p) {
     return NULL;
 }
 
+/* 2.6.0 (FU5): contextual `pub` export marker (SPEC §10.6). `pub` is
+ * never a reserved word — it only acts as a modifier when it appears at
+ * TOP LEVEL immediately followed by a declaration keyword. Peek is done
+ * by saving/restoring the lexer position exactly like the generic-probe
+ * helpers, so `let pub = 5` and `pub` as an ordinary identifier keep
+ * working everywhere else. Returns 1 if a `pub` modifier was consumed. */
+static int parser_try_consume_pub(Parser* p) {
+    int saved_pos = p->lexer->pos;
+    int saved_line = p->lexer->line;
+    int saved_column = p->lexer->column;
+    Token saved_current;
+    int is_decl_modifier = 0;
+
+    if (p->current.type != TOKEN_IDENTIFIER || strcmp(p->current.value, "pub") != 0) {
+        return 0;
+    }
+
+    saved_current.type = p->current.type;
+    saved_current.value = p->current.value ? strdup(p->current.value) : NULL;
+    saved_current.line = p->current.line;
+    saved_current.column = p->current.column;
+
+    advance_p(p);  /* speculative: token after `pub` */
+    if (p->current.type == TOKEN_LET || p->current.type == TOKEN_FN ||
+        p->current.type == TOKEN_STRUCT || p->current.type == TOKEN_IMPL ||
+        p->current.type == TOKEN_ENUM) {
+        is_decl_modifier = 1;
+    }
+
+    if (is_decl_modifier) {
+        /* Keep the advanced position: `pub` is consumed. */
+        token_free(saved_current);
+        return 1;
+    }
+    /* Not a declaration modifier — rewind and let the normal paths run. */
+    token_free(p->current);
+    p->current = saved_current;
+    p->lexer->pos = saved_pos;
+    p->lexer->line = saved_line;
+    p->lexer->column = saved_column;
+    return 0;
+}
+
 ASTProgram* parse_program_v2(Parser* p) {
     ASTProgram* program = ast_new_program();
     ASTNode* head = NULL;
     ASTNode* current = NULL;
 
     while (p->current.type != TOKEN_EOF) {
+        int consumed_pub = parser_try_consume_pub(p);
         ASTNode* stmt = parse_statement(p);
         if (stmt) {
+            if (consumed_pub) {
+                stmt->is_pub = 1;
+            }
             if (!head) {
                 head = stmt;
                 current = stmt;
@@ -2452,6 +2499,10 @@ ASTProgram* parse_program_v2(Parser* p) {
                 current->next = stmt;
                 current = stmt;
             }
+        } else if (consumed_pub) {
+            /* Statement after `pub` failed to parse — the recovery
+             * already reported the error; `pub` was consumed so the
+             * stream stays consistent. */
         }
         if (p->panic_mode) {
             parser_synchronize(p);

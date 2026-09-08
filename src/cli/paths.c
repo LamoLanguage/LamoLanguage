@@ -148,6 +148,15 @@ char* path_join(const char* directory, const char* file_name) {
     return joined;
 }
 
+/* 2.6.0 (FU5): true when path exists AND is a regular file. fopen()
+ * happily opens directories on POSIX, so existence probes for import
+ * resolution must stat() instead. */
+static int lamo_path_is_regular_file(const char* path) {
+    struct stat st;
+    if (!path || stat(path, &st) != 0) return 0;
+    return S_ISREG(st.st_mode);
+}
+
 char* resolve_import_path(const char* importing_file, const char* import_path) {
     char* directory = path_directory(importing_file);
     char* joined;
@@ -265,6 +274,37 @@ char* resolve_import_path(const char* importing_file, const char* import_path) {
     free(directory);
     if (!joined) {
         return NULL;
+    }
+
+    /* 2.6.0 (FU5): folder-based modules (SPEC §10.3). When the direct
+     * file does not exist, a module may live as a folder with a
+     * mod.lamo entry point: `import utils` resolves to utils.lamo if
+     * present, otherwise utils/mod.lamo. The fallback only applies
+     * when the primary path is missing, so existing resolution order
+     * and error messages are unchanged. */
+    {
+        if (lamo_path_is_regular_file(joined)) {
+            /* primary path exists — keep it */
+        } else {
+            size_t jlen = strlen(joined);
+            if (jlen > 5 && strcmp(joined + jlen - 5, ".lamo") == 0) {
+                jlen -= 5;
+            }
+            {
+                size_t fb_len = jlen + strlen("/mod.lamo") + 1;
+                char* fb = malloc(fb_len);
+                if (fb) {
+                    snprintf(fb, fb_len, "%.*s/mod.lamo", (int)jlen, joined);
+                    if (lamo_path_is_regular_file(fb)) {
+                        normalized = normalize_path(fb);
+                        free(fb);
+                        free(joined);
+                        return normalized;
+                    }
+                    free(fb);
+                }
+            }
+        }
     }
 
     normalized = normalize_path(joined);

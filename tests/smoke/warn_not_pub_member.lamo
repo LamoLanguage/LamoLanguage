@@ -1,0 +1,4 @@
+import "fixtures/notpub_lib.lamo" as lib
+
+print(lib.visible())
+print(lib.hidden())

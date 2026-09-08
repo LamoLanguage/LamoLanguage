@@ -32,6 +32,12 @@ typedef struct {
      * `module.member(args)` call arity the same way it validates regular
      * function calls. */
     int arity;
+    /* 2.6.0 (FU5): explicit export marker from the declaration's `pub`
+     * modifier (SPEC §10.6). Non-pub members still export in 2.6, but
+     * reaching one through the alias emits the one-time §10.6 migration
+     * warning (tracked by warned_not_pub so each member warns once). */
+    int is_pub;
+    int warned_not_pub;
 } LamoModuleMember;
 
 typedef struct {
@@ -63,11 +69,12 @@ int lamo_modules_register_alias(LamoModuleRegistry* reg, const char* alias);
  * as strdup'd copies (the caller may free its copies immediately).
  * `prefixed_name` is what the loader renamed the declaration to in the
  * AST. `arity` is the function's parameter count, or -1 for non-function
- * members (global variables). Returns 1 on success, 0 on allocation
- * failure or unknown alias. */
+ * members (global variables). `is_pub` carries the declaration's export
+ * marker (0 when the declaration had no `pub`). Returns 1 on success,
+ * 0 on allocation failure or unknown alias. */
 int lamo_modules_add_member(LamoModuleRegistry* reg, const char* alias,
                              const char* original_name, const char* prefixed_name,
-                             int arity);
+                             int arity, int is_pub);
 
 /* Look up an alias. Returns NULL if not found. */
 const LamoModuleEntry* lamo_modules_lookup_alias(const LamoModuleRegistry* reg, const char* alias);
@@ -78,6 +85,12 @@ const LamoModuleEntry* lamo_modules_lookup_alias(const LamoModuleRegistry* reg, 
  * until lamo_modules_free() is called. */
 const char* lamo_modules_resolve_member(const LamoModuleRegistry* reg,
                                          const char* alias, const char* member_name);
+
+/* 2.6.0 (FU5): find a member record (mutable) so callers can read the
+ * export marker and set warned_not_pub exactly once. Returns NULL when
+ * the alias or member is unknown. */
+LamoModuleMember* lamo_modules_find_member(LamoModuleRegistry* reg,
+                                            const char* alias, const char* member_name);
 
 /* Sprint 4: look up a member's arity. Returns the arity (>= 0) for
  * function members, -1 for non-function members, or -1 if the alias or

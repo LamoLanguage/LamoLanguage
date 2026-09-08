@@ -36,6 +36,8 @@
 #include "parser.h"
 #include "ast.h"
 #include "eval/eval.h"
+#include "import_resolver.h"
+#include "../modules.h"
 
 /* command_new: scaffold a new Lamo project. */
 int command_new(int argc, char** argv) {
@@ -290,6 +292,57 @@ int command_repl(int argc, char** argv) {
         if (parser_had_error(parser)) {
             /* Errors already printed by the parser. Free what we got. */
             if (parsed) ast_free(parsed);
+            parsed = NULL;
+        } else if (parsed && is_stmt && parsed->type == AST_IMPORT) {
+            /* 2.6.0 (FU5): `import "..." as alias;` and `import std.X`
+             * now WORK in the REPL (SPEC §10.7). Run the same recursive
+             * loader the compiler uses (path resolution, cycle
+             * detection, duplicate-import warnings, member renaming),
+             * then load the module's declarations into the env via
+             * eval_load_module_program. The AST must stay alive for the
+             * session — it joins the keep-alive list. */
+            ASTImport* imp = (ASTImport*)parsed;
+            char* resolved = resolve_import_path("./repl.lamo", imp->path);
+            if (!resolved) {
+                fprintf(stderr, "runtime error: failed to resolve import \"%s\"\n", imp->path);
+            } else {
+                CompilationState state;
+                ASTProgram* module_program = ast_new_program();
+                memset(&state, 0, sizeof(state));
+                lamo_modules_init(&state.modules);
+                if (load_program_recursive_from(&state, module_program, resolved,
+                                                 "./repl.lamo", parsed->line, parsed->column,
+                                                 imp->alias)) {
+                    if (!eval_load_module_program(module_program, env)) {
+                        fprintf(stderr, "runtime error: failed to load module '%s'\n",
+                                imp->alias ? imp->alias : imp->path);
+                    } else if (!cli_quiet() && imp->alias) {
+                        printf("module '%s' loaded\n", imp->alias);
+                    }
+                    /* Keep the module AST alive: registered functions
+                     * point into it. */
+                    if (keep_alive_count == keep_alive_capacity) {
+                        size_t new_cap = keep_alive_capacity > 0 ? keep_alive_capacity * 2 : 16;
+                        ASTNode** resized = realloc(keep_alive, sizeof(ASTNode*) * new_cap);
+                        if (resized) {
+                            keep_alive = resized;
+                            keep_alive_capacity = new_cap;
+                            keep_alive[keep_alive_count++] = (ASTNode*)module_program;
+                            module_program = NULL; /* ownership transferred */
+                        } else {
+                            fprintf(stderr, "warning: out of memory for REPL history\n");
+                        }
+                    } else {
+                        keep_alive[keep_alive_count++] = (ASTNode*)module_program;
+                        module_program = NULL;
+                    }
+                    if (module_program) ast_free((ASTNode*)module_program);
+                }
+                free_compilation_state(&state);
+                free(resolved);
+            }
+            /* The import node itself needs no evaluation. */
+            ast_free(parsed);
             parsed = NULL;
         } else if (parsed) {
             EvalSignal sig = EVAL_SIG_NONE;

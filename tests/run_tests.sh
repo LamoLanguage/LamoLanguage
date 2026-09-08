@@ -300,6 +300,50 @@ if [ -d "$RUNTIME_DIR" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 3.5 Eval cases (2.6.0): must `lamo eval` and produce stdout matching
+# .expected. Locks the interpreter's module-loading parity with `run`
+# (SPEC §10.7): module member calls, qualified globals, and imports all
+# resolve in the tree-walking interpreter.
+# ---------------------------------------------------------------------------
+EVAL_DIR="$TESTS_DIR/eval"
+echo
+echo "== Eval cases (interpreter; must match expected stdout) =="
+if [ -d "$EVAL_DIR" ]; then
+    for src in "$EVAL_DIR"/*.lamo; do
+        [ -e "$src" ] || continue
+        name=$(basename "$src")
+        expected_file="${src%.lamo}.expected"
+        if [ ! -e "$expected_file" ]; then
+            record_fail "eval/$name (missing .expected file)"
+            printf "  FAIL  %s (missing .expected file)\n" "$name"
+            continue
+        fi
+        if run_with_timeout "$LAMO" eval "$src" >"$TMP_DIR/actual" 2>"$TMP_DIR/err"; then
+            tr -d '\r' < "$TMP_DIR/actual" > "$TMP_DIR/actual_clean"
+            tr -d '\r' < "$expected_file" > "$TMP_DIR/expected_clean"
+            if diff -u "$TMP_DIR/expected_clean" "$TMP_DIR/actual_clean" >"$TMP_DIR/diff" 2>&1; then
+                record_pass
+                printf "  PASS  %s\n" "$name"
+            else
+                record_fail "eval/$name (stdout mismatch)"
+                printf "  FAIL  %s (stdout mismatch)\n" "$name"
+                sed 's/^/        | /' "$TMP_DIR/diff" >&2
+            fi
+        else
+            rc=$?
+            if [ "$rc" = 124 ]; then
+                record_fail "eval/$name (timed out after 10s)"
+                printf "  FAIL  %s (timed out after 10s)\n" "$name"
+            else
+                record_fail "eval/$name (eval failed)"
+                printf "  FAIL  %s (eval failed)\n" "$name"
+                sed 's/^/        | /' "$TMP_DIR/err" >&2
+            fi
+        fi
+    done
+fi
+
+# ---------------------------------------------------------------------------
 # 4. Standard library tests: must `lamo run` and exit 0 (the test files
 #    use std.testing internally and print PASS/FAIL lines themselves;
 #    they exit non-zero if any test failed).

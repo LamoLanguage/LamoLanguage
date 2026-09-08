@@ -104,6 +104,14 @@ typedef struct ASTNode {
      * sema_enum_name NULL means the call is a regular function call. */
     const char* sema_enum_name;
     int sema_variant_index;
+    /* 2.6.0 (FU5): explicit export marker — `pub fn ...`, `pub let ...`,
+     * `pub struct ...`, `pub impl ...`, `pub enum ...` at top level.
+     * Contextual keyword (never reserved). Recorded per declaration and
+     * per module-registry member; §10.6's two-step rollout means non-pub
+     * declarations still export but emit a warning when reached through
+     * a module alias. Zero for everything the parser builds without an
+     * explicit `pub`. */
+    int is_pub;
 } ASTNode;
 
 typedef struct {

@@ -70,7 +70,7 @@ int lamo_modules_register_alias(LamoModuleRegistry* reg, const char* alias) {
 
 int lamo_modules_add_member(LamoModuleRegistry* reg, const char* alias,
                              const char* original_name, const char* prefixed_name,
-                             int arity) {
+                             int arity, int is_pub) {
     LamoModuleEntry* entry = NULL;
     LamoModuleMember* resized;
     int i;
@@ -103,6 +103,8 @@ int lamo_modules_add_member(LamoModuleRegistry* reg, const char* alias,
     entry->members[entry->member_count].prefixed_name = strdup(prefixed_name);
     if (!entry->members[entry->member_count].prefixed_name) return 0;
     entry->members[entry->member_count].arity = arity;
+    entry->members[entry->member_count].is_pub = is_pub ? 1 : 0;
+    entry->members[entry->member_count].warned_not_pub = 0;
     entry->member_count++;
     return 1;
 }
@@ -127,6 +129,20 @@ const char* lamo_modules_resolve_member(const LamoModuleRegistry* reg,
     for (i = 0; i < entry->member_count; i++) {
         if (strcmp(entry->members[i].original_name, member_name) == 0) {
             return entry->members[i].prefixed_name;
+        }
+    }
+    return NULL;
+}
+
+LamoModuleMember* lamo_modules_find_member(LamoModuleRegistry* reg,
+                                            const char* alias, const char* member_name) {
+    const LamoModuleEntry* entry;
+    int i;
+    entry = lamo_modules_lookup_alias(reg, alias);
+    if (!entry) return NULL;
+    for (i = 0; i < entry->member_count; i++) {
+        if (strcmp(entry->members[i].original_name, member_name) == 0) {
+            return &entry->members[i];
         }
     }
     return NULL;

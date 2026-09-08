@@ -1,12 +1,13 @@
 // Helper module for parse_member_type_args.lamo — must also pass
 // `lamo check` standalone (the smoke runner treats every .lamo here
-// as a case).
-fn pick<T>(a: T, b: T) -> T {
+// as a case). Members are `pub` (SPEC §10.6) so importing them emits
+// no export warnings.
+pub fn pick<T>(a: T, b: T) -> T {
     if (1 < 2) { return a }
     return b
 }
 
-fn show<T>(x: T) -> int {
+pub fn show<T>(x: T) -> int {
     print(x)
     return 0
 }

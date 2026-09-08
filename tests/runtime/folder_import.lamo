@@ -1,0 +1,3 @@
+import "folderpkg" as fp
+
+print(fp.twice(21))

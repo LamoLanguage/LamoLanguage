@@ -1,0 +1,5 @@
+// Folder module (SPEC §10.3): `import folderpkg` resolves to
+// folderpkg/mod.lamo when folderpkg.lamo does not exist.
+pub fn twice(x: int) -> int {
+    return x * 2
+}

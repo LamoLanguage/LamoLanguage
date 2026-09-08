@@ -41,6 +41,9 @@
  * into this file, matching the existing pattern. */
 void generate_c_code(ASTNode* node, FILE* out);
 void codegen_set_module_registry(LamoModuleRegistry* reg);
+/* 2.6.0 (FU5): see codegen.h — records the entry file so the generated
+ * C entry point calls the entry file's fn main() (SPEC §12.1). */
+void codegen_set_entry_file(const char* entry_path);
 
 // Verifica se a AST usa GUI builtins (para linkar -lX11 no Linux).
 // Sprint 2 refactor: the name check now delegates to the shared table in
@@ -217,7 +220,8 @@ int compile_sources(const char** input_files, int input_file_count, LamoCommand 
                                 lamo_source_lookup, &state,
                                 lamo_module_resolve_cb,
                                 lamo_module_arity_cb,
-                                &state)) {
+                                &state,
+                                &state.modules)) {
         exit_code = EXIT_COMPILE_ERROR;
         goto cleanup;
     }
@@ -283,11 +287,18 @@ int compile_sources(const char** input_files, int input_file_count, LamoCommand 
          * prefixed function name. The pointer is borrowed — the
          * registry lives in CompilationState which outlives this call. */
         codegen_set_module_registry(&state.modules);
+        /* 2.6.0 (FU5): pass the entry file so the generated C entry
+         * point calls the entry file's `fn main()` (SPEC §12.1).
+         * state.file_paths[0] is the entry file's normalized path —
+         * the same string the loader handed to the parser, so it
+         * matches ASTFnDecl::file_path. */
+        codegen_set_entry_file(input_file_count > 0 ? state.file_paths[0] : NULL);
         generate_c_code((ASTNode*)program_ast, out);
         /* Clear the registry pointer to avoid dangling references on
          * subsequent compile_sources() calls (defensive — the static
          * would be reused otherwise). */
         codegen_set_module_registry(NULL);
+        codegen_set_entry_file(NULL);
         fclose(out);
 
         if (cli_verbose()) {

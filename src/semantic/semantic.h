@@ -27,6 +27,8 @@ typedef const char* (*LamoModuleResolveFn)(const char* alias, const char* member
 typedef int (*LamoModuleArityFn)(const char* alias, const char* member,
                                   void* user_data);
 
+struct LamoModuleRegistry;
+
 /* Basic entry point: runs the semantic pass with no source-lookup
  * callback. Error messages will be emitted without a source snippet. */
 int semantic_analyze(ASTProgram* program, const char* file_path);
@@ -46,6 +48,7 @@ int semantic_analyze_full(ASTProgram* program, const char* file_path,
                           LamoSourceLookupFn src_lookup, void* src_user_data,
                           LamoModuleResolveFn mod_resolve,
                           LamoModuleArityFn mod_arity,
-                          void* mod_user_data);
+                          void* mod_user_data,
+                          struct LamoModuleRegistry* mod_registry);
 
 #endif

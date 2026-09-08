@@ -1,0 +1,4 @@
+// Helper for err_alias_conflict.lamo — must pass check standalone.
+fn b_thing() -> int {
+    return 2
+}

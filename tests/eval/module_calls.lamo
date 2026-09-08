@@ -1,0 +1,7 @@
+// Interpreter module loading (SPEC §10.7, 2.6.0): member calls, qualified
+// globals, and std imports all resolve in eval mode.
+import "modlib.lamo" as lib
+
+print(lib.twice(21))
+print(lib.BASE)
+print(lib.twice(lib.BASE))

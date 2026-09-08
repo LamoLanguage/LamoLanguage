@@ -1,0 +1,7 @@
+// Helper for tests/eval/module_calls.lamo. The eval runner treats each
+// .lamo in the directory as a case; this one checks standalone too.
+pub let BASE = 10
+
+pub fn twice(x: int) -> int {
+    return x + x
+}

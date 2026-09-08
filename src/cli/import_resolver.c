@@ -408,11 +408,15 @@ int rename_module_declarations(ASTProgram* program, const char* alias,
     const LamoModuleEntry* entry;
     if (!prefix) return 0;
 
-    /* Phase 1: rename top-level decls and register them in the module. */
+    /* Phase 1: rename top-level decls and register them in the module.
+     * 2.6.0 (FU5): each member's `pub` export marker travels with it so
+     * the semantic pass can emit the §10.6 migration warning for non-pub
+     * members reached through the alias. */
     for (cur = program->declarations; cur; cur = cur->next) {
         char* new_name;
         const char* original_name;
         int arity = -1;
+        int is_pub = cur->is_pub;
         if (cur->type == AST_FN_DECL) {
             ASTFnDecl* fn = (ASTFnDecl*)cur;
             original_name = fn->name;
@@ -423,7 +427,7 @@ int rename_module_declarations(ASTProgram* program, const char* alias,
             {
                 char* orig_copy = strdup(original_name);
                 if (!orig_copy) { free(new_name); free(prefix); return 0; }
-                if (!lamo_modules_add_member(reg, alias, orig_copy, new_name, arity)) {
+                if (!lamo_modules_add_member(reg, alias, orig_copy, new_name, arity, is_pub)) {
                     free(orig_copy);
                     free(new_name);
                     free(prefix);
@@ -442,7 +446,7 @@ int rename_module_declarations(ASTProgram* program, const char* alias,
             {
                 char* orig_copy = strdup(original_name);
                 if (!orig_copy) { free(new_name); free(prefix); return 0; }
-                if (!lamo_modules_add_member(reg, alias, orig_copy, new_name, arity)) {
+                if (!lamo_modules_add_member(reg, alias, orig_copy, new_name, arity, is_pub)) {
                     free(orig_copy);
                     free(new_name);
                     free(prefix);
@@ -695,6 +699,22 @@ int load_program_recursive_from(CompilationState* state, ASTProgram* aggregate_p
     if (!load_imports_from_ast(state, aggregate_program, parsed_program->declarations, normalized_path)) {
         ast_free((ASTNode*)parsed_program);
         goto cleanup;
+    }
+
+    /* 2.6.0 (FU5): entry-file vs library-file expectation (SPEC §12.1,
+     * §10.6). A library file may declare its own `fn main` (harmless —
+     * aliased declarations are renamed, and the entry file's main is the
+     * only one invoked) but the user should know it will not run. */
+    for (ASTNode* cur = parsed_program->declarations; cur; cur = cur->next) {
+        if (cur->type == AST_FN_DECL) {
+            ASTFnDecl* fn = (ASTFnDecl*)cur;
+            if (fn->name && strcmp(fn->name, "main") == 0) {
+                fprintf(stderr,
+                        "%s:%d:%d: warning: imported file \"%s\" defines 'fn main'; "
+                        "it will not run — only the entry file's main() is called\n",
+                        imported_from, import_line, import_column, path);
+            }
+        }
     }
 
     /* Sprint 4: if this import had an alias, rename the parsed file's

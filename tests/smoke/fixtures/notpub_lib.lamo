@@ -1,0 +1,8 @@
+// Fixture for warn_not_pub_member.lamo (SPEC §10.6 step-1 warnings).
+pub fn visible() -> int {
+    return 1
+}
+
+fn hidden() -> int {
+    return 2
+}

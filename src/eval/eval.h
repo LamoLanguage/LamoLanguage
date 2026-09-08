@@ -92,6 +92,14 @@ int eval_env_set(EvalEnv* env, const char* name, EvalValue value);
 int eval_program(ASTProgram* program, EvalEnv* env);
 
 /*
+ * eval_load_module_program (2.6.0): load an already-loaded module program
+ * (declarations renamed by the loader) into the REPL environment. Used
+ * by `lamo repl` to make `import "..." as alias;` lines work in the
+ * interpreter (SPEC §10.7). Returns 0 on a module-level runtime error.
+ */
+int eval_load_module_program(ASTProgram* program, EvalEnv* env);
+
+/*
  * eval_expression / eval_statement: lower-level entry points used by the
  * REPL and tests. Both write the signal into *sig.
  */

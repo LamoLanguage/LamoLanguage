@@ -1,0 +1,7 @@
+// SPEC §12.1: the entry file's fn main() is called after top-level
+// initialization and top-level statements.
+print("top-level first")
+
+fn main() {
+    print("from main")
+}
