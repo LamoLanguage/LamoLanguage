@@ -1,0 +1,9 @@
+// Parse + check only: explicit type arguments on module member calls,
+// expression and statement positions (FU3, SPEC §5.5).
+import "member_type_args_lib.lamo" as col
+
+print(col.pick<int>(3, 4))
+let s = col.pick<string>("a", "b")
+print(s)
+let rc = col.show<float>(1.5)
+print(rc)

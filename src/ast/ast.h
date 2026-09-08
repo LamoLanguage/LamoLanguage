@@ -293,11 +293,19 @@ typedef struct {
  * codegen and the interpreter dispatch on context. This avoids splitting
  * the node into AST_MEMBER_CALL_STMT / AST_MEMBER_CALL_EXPR the way the
  * legacy AST_CALL_STMT / AST_CALL_EXPR pair was split — a lesson learned
- * the hard way from the call-stmt/call-expr duplication. */
+ * the hard way from the call-stmt/call-expr duplication.
+ *
+ * 2.6.0 (FU3): optional explicit type arguments on the member call —
+ * `col.pick<int>(3, 4)`. Same semantics as ASTCallExpr's type_args:
+ * strings are strdup'd, type_arg_count == 0 for the common inferred
+ * case, and the parser only fills them when lookahead confirms
+ * `< ... > (` so comparisons never misparse. */
 typedef struct {
     ASTNode base;
     struct ASTNode* object;       /* typically AST_IDENTIFIER(name = alias) */
     char* member_name;            /* e.g. "sqrt" in `math.sqrt(x)` */
+    char** type_args;
+    int type_arg_count;
     struct ASTNode** args;
     int arg_count;
 } ASTMemberCall;
@@ -504,6 +512,10 @@ ASTPropExpr* ast_new_prop_expr(ASTNode* object, char* prop_name, int line, int c
  * constructors as usual). `member_name` is strdup'd. `object` is owned
  * by the AST and freed in ast_free(). */
 ASTMemberCall* ast_new_member_call(ASTNode* object, char* member_name, ASTNode** args, int arg_count, int line, int column);
+/* 2.6.0 (FU3): variant carrying optional explicit type arguments
+ * (`col.pick<int>(3, 4)`). type_args entries are strdup'd; pass
+ * type_arg_count = 0 for the inferred form. */
+ASTMemberCall* ast_new_member_call_typed(ASTNode* object, char* member_name, char** type_args, int type_arg_count, ASTNode** args, int arg_count, int line, int column);
 
 /* ─── Phase 2: structs / methods / enums / match ──────────────────── */
 

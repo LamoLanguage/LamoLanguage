@@ -2873,7 +2873,26 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
                             tmap.names = fsym->tp_names;
                             tmap.values = malloc(sizeof(const char*) * (size_t)(fsym->tp_count > 0 ? fsym->tp_count : 1));
                             tmap.count = fsym->tp_count;
-                            for (int i = 0; i < fsym->tp_count; i++) tmap.values[i] = NULL;
+                            /* 2.6.0 (FU3): explicit type arguments fill
+                             * positions first (RFC §4.5) — `col.pick<int>(3, 4)`
+                             * now validates exactly like the plain-call form
+                             * `pick<int>(3, 4)`. */
+                            if (mc->type_arg_count > 0 && mc->type_arg_count != fsym->tp_count) {
+                                char message[300];
+                                snprintf(message, sizeof(message),
+                                         "module member '%s.%s' expects %d type argument(s), got %d",
+                                         alias, mc->member_name, fsym->tp_count, mc->type_arg_count);
+                                semantic_error_at(ctx, node->line, node->column, message);
+                            }
+                            for (int i = 0; i < fsym->tp_count; i++) {
+                                if (mc->type_args && i < mc->type_arg_count && mc->type_args[i]) {
+                                    char* n = semantic_normalize_type(mc->type_args[i]);
+                                    tmap.values[i] = lamo_intern_type(n);
+                                    free(n);
+                                } else {
+                                    tmap.values[i] = NULL;
+                                }
+                            }
                             const char* argf[LAMO_MAX_BIND_ARGS] = {0};
                             for (int i = 0; i < mc->arg_count; i++) {
                                 semantic_infer_expression(ctx, mc->args[i]);

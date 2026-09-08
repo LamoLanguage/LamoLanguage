@@ -306,11 +306,26 @@ ASTPropExpr* ast_new_prop_expr(ASTNode* object, char* prop_name, int line, int c
  * its elements are NOT — they remain owned by their respective constructors
  * (which is the same convention as ASTCallStmt / ASTCallExpr). */
 ASTMemberCall* ast_new_member_call(ASTNode* object, char* member_name, ASTNode** args, int arg_count, int line, int column) {
+    return ast_new_member_call_typed(object, member_name, NULL, 0, args, arg_count, line, column);
+}
+
+/* 2.6.0 (FU3): member-call constructor with optional explicit type
+ * arguments — `col.pick<int>(3, 4)`. type_args entries are strdup'd
+ * here; type_arg_count may be 0 (inferred). */
+ASTMemberCall* ast_new_member_call_typed(ASTNode* object, char* member_name, char** type_args, int type_arg_count, ASTNode** args, int arg_count, int line, int column) {
     ASTMemberCall* node = (ASTMemberCall*)ast_new_node(AST_MEMBER_CALL, sizeof(ASTMemberCall), line, column);
+    int i;
     node->object = object;
     node->member_name = strdup(member_name);
     node->args = args;
     node->arg_count = arg_count;
+    if (type_arg_count > 0 && type_args) {
+        node->type_args = malloc(sizeof(char*) * (size_t)type_arg_count);
+        node->type_arg_count = type_arg_count;
+        for (i = 0; i < type_arg_count; i++) {
+            node->type_args[i] = type_args[i] ? strdup(type_args[i]) : NULL;
+        }
+    }
     return node;
 }
 
@@ -692,11 +707,16 @@ void ast_free(ASTNode* node) {
             }
             case AST_MEMBER_CALL: {
                 /* Sprint 4: module member call. Free object, member_name,
-                 * each arg expression, then the args array itself. */
+                 * each arg expression, then the args array itself.
+                 * 2.6.0: also the explicit type-argument names. */
                 ASTMemberCall* mc = (ASTMemberCall*)node;
                 int i;
                 ast_free(mc->object);
                 free(mc->member_name);
+                for (i = 0; i < mc->type_arg_count; i++) {
+                    free(mc->type_args[i]);
+                }
+                free(mc->type_args);
                 for (i = 0; i < mc->arg_count; i++) {
                     ast_free(mc->args[i]);
                 }

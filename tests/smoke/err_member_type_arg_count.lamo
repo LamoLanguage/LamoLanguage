@@ -1,0 +1,2 @@
+import "member_type_args_lib.lamo" as col
+col.pick<int, string>(1, 2)

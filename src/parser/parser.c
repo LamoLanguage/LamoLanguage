@@ -204,6 +204,12 @@ static ASTNode* parse_primary(Parser* p);
 static ASTNode* parse_postfix(Parser* p);
 static ASTNode* parser_recover(Parser* p);
 
+/* 2.6.0 (FU3): forward declarations — parse_postfix now emits explicit
+ * type arguments on member calls (`col.pick<int>(...)`), and the probe/
+ * parse helpers are defined further down in the generics section. */
+static int probe_angle_type_list(Parser* p, LamoTokenType follow);
+static char** parse_angle_type_args_real(Parser* p, int* out_count);
+
 static ASTNode* parse_postfix(Parser* p) {
     ASTNode* node = parse_primary(p);
     while (1) {
@@ -231,7 +237,18 @@ static ASTNode* parse_postfix(Parser* p) {
              * AST_MEMBER_CALL. Otherwise it's a property access
              * (expr.prop) - build an AST_PROP_EXPR. The semantic pass
              * dispatches AST_MEMBER_CALL based on the object's inferred
-             * type: module alias / array / struct. */
+             * type: module alias / array / struct.
+             *
+             * 2.6.0 (FU3): the method name may carry explicit type
+             * arguments — `col.pick<int>(3, 4)`. The speculative scanner
+             * probe confirms the `< ... > (` shape so `a < b` comparisons
+             * never misparse (same gate as plain calls, PR 2). */
+            char** mc_type_args = NULL;
+            int mc_type_arg_count = 0;
+            if (p->current.type == TOKEN_LT &&
+                probe_angle_type_list(p, TOKEN_LPAREN)) {
+                mc_type_args = parse_angle_type_args_real(p, &mc_type_arg_count);
+            }
             if (p->current.type == TOKEN_LPAREN) {
                 advance_p(p);  /* consume '(' */
                 ASTNode** args = NULL;
@@ -246,6 +263,8 @@ static ASTNode* parse_postfix(Parser* p) {
                             for (int i = 0; i < arg_count; i++) ast_free(args[i]);
                             free(args);
                             free(prop_name);
+                            for (int i = 0; i < mc_type_arg_count; i++) free(mc_type_args[i]);
+                            free(mc_type_args);
                             ast_free(node);
                             return parser_recover(p);
                         }
@@ -255,9 +274,14 @@ static ASTNode* parse_postfix(Parser* p) {
                     if (p->current.type == TOKEN_COMMA) advance_p(p);
                 }
                 expect_p(p, TOKEN_RPAREN, "missing ')' after method call arguments");
-                node = (ASTNode*)ast_new_member_call(node, prop_name, args, arg_count, prop_line, prop_column);
+                node = (ASTNode*)ast_new_member_call_typed(node, prop_name, mc_type_args, mc_type_arg_count, args, arg_count, prop_line, prop_column);
                 free(prop_name);
             } else {
+                /* Type args without a call — treat as a comparison to
+                 * keep old code working (defensive; the probe above
+                 * makes this unreachable in practice). */
+                for (int i = 0; i < mc_type_arg_count; i++) free(mc_type_args[i]);
+                free(mc_type_args);
                 node = (ASTNode*)ast_new_prop_expr(node, prop_name, line, column);
                 free(prop_name);
             }
@@ -762,6 +786,16 @@ static ASTNode* parse_primary(Parser* p) {
             }
             char* member_name = strdup(p->current.value);
             eat_p(p, TOKEN_IDENTIFIER);
+            /* 2.6.0 (FU3): the member name may carry explicit type
+             * arguments — `col.pick<int>(3, 4)`. The speculative scanner
+             * probe confirms the `< ... > (` shape so comparisons never
+             * misparse (same gate as plain calls, PR 2). */
+            char** ex_type_args = NULL;
+            int ex_type_arg_count = 0;
+            if (p->current.type == TOKEN_LT &&
+                probe_angle_type_list(p, TOKEN_LPAREN)) {
+                ex_type_args = parse_angle_type_args_real(p, &ex_type_arg_count);
+            }
             /* Only build a member CALL when followed by '('. Otherwise
              * fall back to a property expression (AST_PROP_EXPR) so the
              * existing `.len` and future `.prop` forms keep working. The
@@ -771,14 +805,19 @@ static ASTNode* parse_primary(Parser* p) {
             int arg_count = 0;
             ASTNode** args = NULL;
             if (!parse_paren_args(p, &args, &arg_count)) {
-                free(name); free(member_name); return parser_recover(p);
+                free(name); free(member_name);
+                for (int i = 0; i < ex_type_arg_count; i++) free(ex_type_args[i]);
+                free(ex_type_args);
+                return parser_recover(p);
             }
             ASTNode* obj = (ASTNode*)ast_new_identifier(name, obj_line, obj_column);
-            ASTNode* node = (ASTNode*)ast_new_member_call(obj, member_name, args, arg_count, line, column);
+            ASTNode* node = (ASTNode*)ast_new_member_call_typed(obj, member_name, ex_type_args, ex_type_arg_count, args, arg_count, line, column);
             free(name);
             free(member_name);
             return node;
         } else {
+                for (int i = 0; i < ex_type_arg_count; i++) free(ex_type_args[i]);
+                free(ex_type_args);
                 /* `module.member` without a call — build a prop_expr so
                  * parse_postfix can keep wrapping further `.x.y.z` chains.
                  * The semantic pass resolves whether `object` is a module
@@ -2031,6 +2070,14 @@ ASTNode* parse_statement(Parser* p) {
                     int seg_line = p->current.line;
                     int seg_column = p->current.column;
                     advance_p(p);
+                    /* 2.6.0 (FU3): chained member call may carry explicit
+                     * type arguments — `self.items.fn<int>(...)`. */
+                    char** ch_type_args = NULL;
+                    int ch_type_arg_count = 0;
+                    if (p->current.type == TOKEN_LT &&
+                        probe_angle_type_list(p, TOKEN_LPAREN)) {
+                        ch_type_args = parse_angle_type_args_real(p, &ch_type_arg_count);
+                    }
                     if (p->current.type == TOKEN_LPAREN) {
                         int arg_count = 0;
                         ASTNode** args = NULL;
@@ -2038,15 +2085,28 @@ ASTNode* parse_statement(Parser* p) {
                             free(seg); ast_free(chain); return parser_recover(p);
                         }
                         optional_semicolon(p);
-                        ASTNode* node = (ASTNode*)ast_new_member_call(chain, seg,
-                                                                      args, arg_count,
-                                                                      seg_line, seg_column);
+                        ASTNode* node = (ASTNode*)ast_new_member_call_typed(chain, seg,
+                                                                              ch_type_args, ch_type_arg_count,
+                                                                              args, arg_count,
+                                                                              seg_line, seg_column);
                         free(seg);
                         return node;
                     }
+                    for (int i = 0; i < ch_type_arg_count; i++) free(ch_type_args[i]);
+                    free(ch_type_args);
                     chain = (ASTNode*)ast_new_prop_expr(chain, seg, seg_line, seg_column);
                     free(seg);
                 }
+            }
+
+            /* 2.6.0 (FU3): the member name may carry explicit type
+             * arguments — `col.pick<int>(3, 4);` in statement position.
+             * Same probe gate as plain calls so `a < b` never misparses. */
+            char** st_type_args = NULL;
+            int st_type_arg_count = 0;
+            if (p->current.type == TOKEN_LT &&
+                probe_angle_type_list(p, TOKEN_LPAREN)) {
+                st_type_args = parse_angle_type_args_real(p, &st_type_arg_count);
             }
 
             if (p->current.type == TOKEN_LPAREN) {
@@ -2054,17 +2114,24 @@ ASTNode* parse_statement(Parser* p) {
                 int arg_count = 0;
                 ASTNode** args = NULL;
                 if (!parse_paren_args(p, &args, &arg_count)) {
-                    free(name); free(member_name); return parser_recover(p);
+                    free(name); free(member_name);
+                    for (int i = 0; i < st_type_arg_count; i++) free(st_type_args[i]);
+                    free(st_type_args);
+                    return parser_recover(p);
                 }
                 optional_semicolon(p);  /* Phase 2: `;` optional */
                 ASTNode* obj = (ASTNode*)ast_new_identifier(name, obj_line, obj_column);
-                ASTNode* node = (ASTNode*)ast_new_member_call(obj, member_name, args, arg_count, line, column);
+                ASTNode* node = (ASTNode*)ast_new_member_call_typed(obj, member_name, st_type_args, st_type_arg_count, args, arg_count, line, column);
                 free(name);
                 free(member_name);
                 return node;
             } else if (p->current.type == TOKEN_EQUALS || p->current.type == TOKEN_PLUS_EQ ||
                        p->current.type == TOKEN_MINUS_EQ) {
-                /* Phase 2: field assignment `obj.field = value;` */
+                /* Phase 2: field assignment `obj.field = value;` — type
+                 * args (if any were parsed) are discarded here; the
+                 * probe should not have accepted this shape. */
+                for (int i = 0; i < st_type_arg_count; i++) free(st_type_args[i]);
+                free(st_type_args);
                 LamoTokenType op_type = p->current.type;
                 advance_p(p);
                 ASTNode* value = parse_expression(p);
@@ -2082,6 +2149,8 @@ ASTNode* parse_statement(Parser* p) {
                 parser_error(p, "expected '(' or '=' after '.member' in statement");
                 free(name);
                 free(member_name);
+                for (int i = 0; i < st_type_arg_count; i++) free(st_type_args[i]);
+                free(st_type_args);
                 return parser_recover(p);
             }
         }
