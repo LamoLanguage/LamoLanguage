@@ -1,0 +1,17 @@
+import "modlib/geometry.lamo" as geo
+
+// Field access on a module-returned struct.
+let p = geo.make_point(1, 2)
+print(p.x)
+print(p.y)
+
+// Method call on a module-returned struct.
+print(p.norm())
+
+// Field assignment through the typed variable.
+p.x = 42
+print(p.x)
+
+// Chained call on a temporary module result.
+print(geo.make_point(7, 8).norm())
+print(geo.origin().y)

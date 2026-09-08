@@ -583,6 +583,23 @@ alias.member(args)
 `import std.X as alias`. `member` must be a top-level function in that module.
 Arity is validated.
 
+**Return-type flow (2.6.0):** when the member's declared return type names a
+struct, the call result is struct-typed in the importing file — field access
+(`p.x`), method calls (`p.norm()`), field assignment (`p.x = v`), and method
+chaining on the result all work exactly as they do for locally produced
+structs. Before 2.6.0 such results erased to an opaque value and field access
+silently produced `0`. The struct itself must be visible to the importer; a
+module that wants its struct-typed results to be usable should either declare
+the struct before returning it (the declaration merges/imports with the file,
+so this is automatic) — see §10.2.
+
+**Explicit type arguments (2.6.0):** generic module members accept explicit
+type arguments at the call site, in every position — `col.pick<int>(3, 4)`
+parses and validates exactly like the plain-call form `pick<int>(3, 4)`
+(RFC §4.5). Explicit arguments override call-site inference; the count must
+match the member's type-parameter count. Type arguments are erased at
+runtime.
+
 ### 5.6 Indexing
 
 ```
@@ -981,6 +998,12 @@ Loads `math.lamo` and exposes its top-level functions and globals under the
 `math` alias. Calls go through `alias.member(args)` syntax. The loader renames
 the imported declarations to `lamo_mod_<alias>__<name>` internally to avoid
 collisions with the importing file's own declarations.
+
+Struct and enum declarations inside the module are NOT renamed — they keep
+their bare names, which is what makes §5.5's return-type flow possible: a
+module function can return a struct it declares, and the importing file sees
+the same struct definition (first import wins on duplicate struct names,
+per §10.5's duplicate rules).
 
 ### 10.3 Bare-identifier import
 

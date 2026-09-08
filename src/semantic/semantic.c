@@ -1773,6 +1773,31 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
             if (var_decl->initializer && var_decl->initializer->type == AST_ARRAY_LITERAL) {
                 init_type = LAMO_TYPE_ARRAY;
             }
+            /* 2.6.0 FU2 (module-boundary type flow): calls whose resolved
+             * return type names a declared struct — module member calls
+             * (`let p = lib.make_point(1, 2)`) and plain calls — carry
+             * the substituted type on the initializer's sema_full_type.
+             * Propagate the struct so the variable is struct-typed and
+             * field access / method calls work in the importing file
+             * (SPEC §5.5, §10.2). Covers both an UNKNOWN-typed call that
+             * is upgraded to struct and a call that already returned
+             * LAMO_TYPE_STRUCT without carrying a name (member calls). */
+            if (!inferred_struct_name && var_decl->initializer &&
+                (var_decl->initializer->sema_full_type ||
+                 var_decl->initializer->sema_struct_name)) {
+                char head[64];
+                if (var_decl->initializer->sema_struct_name) {
+                    snprintf(head, sizeof(head), "%s", var_decl->initializer->sema_struct_name);
+                } else {
+                    ann_head(var_decl->initializer->sema_full_type, head, sizeof(head));
+                }
+                if (find_struct_def(ctx, head)) {
+                    if (init_type == LAMO_TYPE_UNKNOWN) init_type = LAMO_TYPE_STRUCT;
+                    if (init_type == LAMO_TYPE_STRUCT) {
+                        inferred_struct_name = lamo_intern_type(head);
+                    }
+                }
+            }
             /* Sprint 3: validate type annotation if present. The check is
              * strict: int != float (annotated int with float initializer
              * is an error), and string/bool are entirely separate. The
@@ -2801,87 +2826,115 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
              *   - Else: error. */
             ASTMemberCall* mc = (ASTMemberCall*)node;
             const char* alias = NULL;
+            int resolved_module_call = 0;
             if (!mc->object) {
                 semantic_error_at(ctx, node->line, node->column,
                                   "member call missing object expression");
                 return LAMO_TYPE_UNKNOWN;
             }
             /* If the object is an identifier, try module-alias resolution
-             * first (Sprint 4 behavior). */
+             * first (Sprint 4 behavior). 2.6.0 FU2: resolution no longer
+             * returns early — it defers to the FULL signature-binding
+             * path below so imported functions keep their return types
+             * (including struct results) across module boundaries. */
             if (mc->object->type == AST_IDENTIFIER) {
                 alias = ((ASTIdentifier*)mc->object)->name;
                 if (ctx->module_resolve && ctx->module_resolve(alias, mc->member_name, ctx->module_user_data)) {
-                    /* It's a module call. Validate arity and visit args. */
-                    if (!ctx->module_arity) {
-                        for (int i = 0; i < mc->arg_count; i++) {
-                            semantic_infer_expression(ctx, mc->args[i]);
+                    resolved_module_call = 1;
+                    /* Registry arity check (fast path for all members). */
+                    if (ctx->module_arity) {
+                        int expected_arity = ctx->module_arity(alias, mc->member_name, ctx->module_user_data);
+                        if (expected_arity >= 0 && expected_arity != mc->arg_count) {
+                            char message[256];
+                            snprintf(message, sizeof(message),
+                                     "module member `%s.%s` expects %d argument(s), got %d",
+                                     alias, mc->member_name, expected_arity, mc->arg_count);
+                            semantic_error_at(ctx, node->line, node->column, message);
                         }
-                        return LAMO_TYPE_UNKNOWN;
-                    }
-                    int expected_arity = ctx->module_arity(alias, mc->member_name, ctx->module_user_data);
-                    if (expected_arity >= 0 && expected_arity != mc->arg_count) {
-                        char message[256];
-                        snprintf(message, sizeof(message),
-                                 "module member `%s.%s` expects %d argument(s), got %d",
-                                 alias, mc->member_name, expected_arity, mc->arg_count);
-                        semantic_error_at(ctx, node->line, node->column, message);
-                    }
-                    for (int i = 0; i < mc->arg_count; i++) {
-                        semantic_infer_expression(ctx, mc->args[i]);
-                    }
-                    return LAMO_TYPE_UNKNOWN;
-                }
-                /* Not a module alias; fall through to value-method-call. */
-            }
-            /* Generics PR 2 §5.3: when this member call targets an
-             * IMPORTED function, its renamed declaration still lives in
-             * the global scope — look it up and run the SAME signature
-             * binding/validation as plain calls, so Option<T>-style
-             * factories keep their payload types across boundaries. */
-            if (ctx->module_resolve) {
-                const char* prefixed = ctx->module_resolve(alias, mc->member_name, ctx->module_user_data);
-                if (prefixed) {
-                    Symbol* fsym = scope_find(ctx->current_scope, prefixed);
-                    if (fsym && fsym->kind == SYMBOL_FN &&
-                        fsym->arity == mc->arg_count && fsym->param_full &&
-                        mc->arg_count <= LAMO_MAX_BIND_ARGS) {
-                        AnnSubstMap tmap;
-                        tmap.names = fsym->tp_names;
-                        tmap.values = malloc(sizeof(const char*) * (size_t)(fsym->tp_count > 0 ? fsym->tp_count : 1));
-                        tmap.count = fsym->tp_count;
-                        for (int i = 0; i < fsym->tp_count; i++) tmap.values[i] = NULL;
-                        const char* argf[LAMO_MAX_BIND_ARGS] = {0};
-                        for (int i = 0; i < mc->arg_count; i++) {
-                            semantic_infer_expression(ctx, mc->args[i]);
-                            argf[i] = arg_concrete_full_type(ctx, mc->args[i]);
-                        }
-                        int mismatch = 0;
-                        for (int i = 0; i < mc->arg_count; i++) {
-                            const char* pat = fsym->param_full[i];
-                            if (!pat || !argf[i]) continue;
-                            int r = ann_bind_pattern(pat, argf[i], &tmap);
-                            if (r == 0) {
-                                mismatch = 1;
-                                char message[300];
-                                snprintf(message, sizeof(message),
-                                         "argument %d to '%s.%s': expected type '%s', got '%s'",
-                                         i + 1, alias, mc->member_name, pat, argf[i]);
-                                semantic_error_at(ctx, node->line, node->column, message);
-                            }
-                        }
-                        (void)mismatch;
-                        if (fsym->ret_full) {
-                            char* sub = ann_subst(fsym->ret_full, &tmap);
-                            if (sub) {
-                                node->sema_full_type = lamo_intern_type(sub);
-                                free(sub);
-                            }
-                        }
-                        free(tmap.values);
-                        return LAMO_TYPE_UNKNOWN;
                     }
                 }
             }
+            if (resolved_module_call) {
+                /* Generics PR 2 §5.3: when this member call targets an
+                 * IMPORTED function, its renamed declaration still lives in
+                 * the global scope — look it up and run the SAME signature
+                 * binding/validation as plain calls, so Option<T>-style
+                 * factories keep their payload types across boundaries.
+                 * 2.6.0 FU2: when the substituted return type names a
+                 * declared struct, the RESULT is struct-typed (SPEC §5.5). */
+                if (ctx->module_resolve) {
+                    const char* prefixed = ctx->module_resolve(alias, mc->member_name, ctx->module_user_data);
+                    if (prefixed) {
+                        Symbol* fsym = scope_find(ctx->current_scope, prefixed);
+                        if (fsym && fsym->kind == SYMBOL_FN &&
+                            fsym->arity == mc->arg_count && fsym->param_full &&
+                            mc->arg_count <= LAMO_MAX_BIND_ARGS) {
+                            AnnSubstMap tmap;
+                            tmap.names = fsym->tp_names;
+                            tmap.values = malloc(sizeof(const char*) * (size_t)(fsym->tp_count > 0 ? fsym->tp_count : 1));
+                            tmap.count = fsym->tp_count;
+                            for (int i = 0; i < fsym->tp_count; i++) tmap.values[i] = NULL;
+                            const char* argf[LAMO_MAX_BIND_ARGS] = {0};
+                            for (int i = 0; i < mc->arg_count; i++) {
+                                semantic_infer_expression(ctx, mc->args[i]);
+                                argf[i] = arg_concrete_full_type(ctx, mc->args[i]);
+                            }
+                            int mismatch = 0;
+                            for (int i = 0; i < mc->arg_count; i++) {
+                                const char* pat = fsym->param_full[i];
+                                if (!pat || !argf[i]) continue;
+                                int r = ann_bind_pattern(pat, argf[i], &tmap);
+                                if (r == 0) {
+                                    mismatch = 1;
+                                    char message[300];
+                                    snprintf(message, sizeof(message),
+                                             "argument %d to '%s.%s': expected type '%s', got '%s'",
+                                             i + 1, alias, mc->member_name, pat, argf[i]);
+                                    semantic_error_at(ctx, node->line, node->column, message);
+                                }
+                            }
+                            (void)mismatch;
+                            if (fsym->ret_full) {
+                                char* sub = ann_subst(fsym->ret_full, &tmap);
+                                if (sub) {
+                                    node->sema_full_type = lamo_intern_type(sub);
+                                    /* ── 2.6.0 FU2: module-boundary type flow ──
+                                     * When the substituted return type names a
+                                     * declared struct, the call RESULT is
+                                     * struct-typed: annotate the node so field
+                                     * access (`p.x`) and method calls
+                                     * (`p.norm()`) work in the importing file
+                                     * exactly like local returns (SPEC §5.5,
+                                     * §10.2). Previously the result erased to
+                                     * an opaque unknown/array-ish value and
+                                     * field access silently produced 0. */
+                                    {
+                                        char head[64];
+                                        ann_head(sub, head, sizeof(head));
+                                        if (find_struct_def(ctx, head)) {
+                                            node->sema_struct_name = lamo_intern_type(head);
+                                            free(sub);
+                                            free(tmap.values);
+                                            return LAMO_TYPE_STRUCT;
+                                        }
+                                    }
+                                    free(sub);
+                                }
+                            }
+                            free(tmap.values);
+                            return LAMO_TYPE_UNKNOWN;
+                        }
+                    }
+                }
+                /* Member is a module global variable, or the renamed fn
+                 * declaration has no signature info — visit args and
+                 * stay type-unknown (legacy behavior). */
+                for (int i = 0; i < mc->arg_count; i++) {
+                    semantic_infer_expression(ctx, mc->args[i]);
+                }
+                return LAMO_TYPE_UNKNOWN;
+            }
+            /* Not a module alias; fall through to value-method-call. */
             /* Phase 2: value method call. Infer the object's type. */
             LamoType obj_type = semantic_infer_expression(ctx, mc->object);
             const char* obj_struct_name = NULL;
@@ -2889,6 +2942,19 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
                 Symbol* sym = scope_find(ctx->current_scope, ((ASTIdentifier*)mc->object)->name);
                 if (sym && sym->kind == SYMBOL_VAR) {
                     obj_struct_name = sym->struct_name;
+                }
+            }
+            /* 2.6.0 FU2: chains on module-returned structs —
+             * `lib.make_point(1, 2).norm()`. The inner module call is not
+             * an identifier, but its (now propagated) full type still
+             * identifies the struct. Mirrors the AST_PROP_EXPR fallback
+             * (Generics PR 2 §5.3). */
+            if (!obj_struct_name && mc->object->sema_full_type) {
+                char fh[64];
+                ann_head(mc->object->sema_full_type, fh, sizeof(fh));
+                if (find_struct_def(ctx, fh)) {
+                    obj_struct_name = lamo_intern_type(fh);
+                    obj_type = LAMO_TYPE_STRUCT;
                 }
             }
             if (obj_type == LAMO_TYPE_ARRAY || (obj_type == LAMO_TYPE_UNKNOWN && !obj_struct_name)) {

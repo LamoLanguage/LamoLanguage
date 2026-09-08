@@ -1,0 +1,21 @@
+// Library module: a struct, an impl with methods, and factory fns.
+// The struct-typed return values must flow into the importing file
+// (SPEC §10.2, 2.6.0 module-boundary type flow).
+struct Point {
+    x: int,
+    y: int
+}
+
+impl Point {
+    fn norm() -> int {
+        return self.x + self.y
+    }
+}
+
+fn make_point(x: int, y: int) -> Point {
+    return Point { x: x, y: y }
+}
+
+fn origin() -> Point {
+    return Point { x: 0, y: 0 }
+}
