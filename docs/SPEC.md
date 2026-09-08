@@ -796,7 +796,7 @@ functions. The semantic pass resolves them via a builtin table.
 
 | Name            | Arity | Signature                                  | Returns  | Notes |
 |-----------------|-------|--------------------------------------------|----------|-------|
-| `print`         | 1     | `print(x: any) -> void`                    | `void`   | prints `x` followed by newline |
+| `print`         | 1     | `print(x: any) -> void`                    | `void`   | prints `x` followed by newline; booleans render `true`/`false` (§8.1) |
 | `input`         | 0     | `input() -> int`                           | `int`    | reads a line, parses as int |
 | `input_int`     | 0     | `input_int() -> int`                       | `int`    | alias for `input` |
 | `input_str`     | 0     | `input_str() -> string`                    | `string` | reads a line as string |
@@ -810,6 +810,24 @@ functions. The semantic pass resolves them via a builtin table.
 | `exit`          | 1     | `exit(code: int) -> void`                  | `void`   | terminates with exit code |
 
 Platform-specific builtins (GUI, HTTP) are documented in §11.
+
+### 8.1 Boolean print form (decision, 2.6.0)
+
+`print(b)` where `b` is a boolean renders **`true`** or **`false`**, not
+`1`/`0`. This is now specified and locked so downstream tooling can depend
+on it. Rationale and scope:
+
+- The language has first-class `true`/`false` literals; echoing a bool back
+  as `1`/`0` translated the value into a different type's spelling.
+- Before 2.6.0 the renderer was internally inconsistent: the same boolean
+  printed `1` at the top level but `true` inside an array (`[true, false]`)
+  or a struct field. The decision removes the special case rather than
+  spreading it.
+- The tree-walking interpreter (`eval`/`repl`) always rendered `true`/`false`;
+  the C backend now matches, so the two execution paths agree (§10.7).
+- Converting a boolean to its numeric form stays explicit: `int(b)` yields
+  `1`/`0`. Truthiness rules (§6.3) are unchanged — `if (b)` behaves the same
+  as before, and `if (0)`/`if (1)` remain valid for ints.
 
 ---
 

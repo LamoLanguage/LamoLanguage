@@ -1,0 +1,19 @@
+// SPEC §8 (2.6.0): booleans print as `true`/`false` everywhere —
+// top-level values, inside arrays, inside structs, and as results of
+// comparisons and logical operators. Numeric coercion stays explicit
+// via int(b); truthiness (§6.3) is unchanged.
+print(true)
+print(false)
+print(1 == 2)
+print(3 > 2)
+print([true, false])
+print(!true)
+
+let flag: bool = 10 % 2 == 0
+print(flag)
+
+struct Flags {
+    on: bool,
+    off: bool
+}
+print(Flags { on: true, off: false })

@@ -697,6 +697,15 @@ static LAMO_UNUSED void lamo_print_value(LamoValue value) {
             }
         }
         printf(" }\n");
+    } else if (value.type == LAMO_VALUE_BOOL) {
+        /* SPEC §8 (2.6.0 decision): booleans render as `true`/`false`,
+         * matching the bool literals in the language, the array/struct
+         * element renderer (lamo_value_to_owned_string), and the eval
+         * interpreter. The legacy `1`/`0` form was an inconsistency:
+         * the SAME value printed `true` inside an array and `1` at the
+         * top level. Numeric coercion is available explicitly via
+         * `int(b)`; truthiness rules (§6.3) are unchanged. */
+        printf(value.int_value ? "true\n" : "false\n");
     } else {
         printf("%lld\n", value.int_value);
     }
