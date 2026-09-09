@@ -3,7 +3,8 @@
 This file tracks implementation work per phase. Sprint 2.5.0 completed every
 outstanding item below; each completed row carries a short evidence note
 pointing at the code, docs, or tests that fulfill it. Sprint 2.6.0 completed
-the entire **Open Follow-Ups** ledger (see "Completed in 2.6.0"); the
+the entire 2.5.0 **Open Follow-Ups** ledger; sprint 2.7.0 completed the
+2.6.0 **Open Follow-Ups** ledger (see "Completed in 2.7.0"); the
 **Open Follow-Ups** section below now lists genuinely new work discovered
 along the way.
 
@@ -25,25 +26,39 @@ along the way.
 | Phase 11 — Backend evolution | ✅ Complete (VM/LLVM deferred by design) |
 | Cross-cutting work | ✅ Ongoing policy, currently honored |
 | Open Follow-Ups (2.5.0 ledger) | ✅ Complete (2.6.0) |
+| Open Follow-Ups (2.6.0 ledger) | ✅ Complete (2.7.0) |
 
 ## Open Follow-Ups
 
-Honest ledger of work discovered but **not** completed in 2.6.0:
+Honest ledger of work discovered but **not** completed in 2.7.0:
 
-- [ ] **Enum type annotations** — `let o: Option<int> = ...` and enum-typed
-      parameters/returns. Tagged-union enums ship with inference only; the
-      annotation resolver needs an enum-aware arm (see SPEC §3.5).
-- [ ] **Pattern destructuring & guards** — nested payload patterns
-      (`Some(Pair(a, b))`) and `when` guards in `match` (SPEC §4.6/§13).
-- [ ] **pub step 2** — enforce §10.6: non-`pub` members become unresolvable
-      through aliases; the step-1 warning becomes an error (one release
-      after 2.6.0).
-- [ ] **Variant qualification** — cross-enum variant name shadowing is still
-      resolved by "later wins" (SPEC §3.5 known wart); `Enum::Variant`
-      qualification is the fix.
-- [ ] **Windows eval/REPL parity checks** — 2.6.0 was developed and tested on
-      POSIX; the eval suite section in run_tests.ps1 still needs the new
-      tests/eval cases mirrored.
+- [ ] **Eval/REPL enum support** — the tree-walking interpreter still does
+      not evaluate `enum` declarations, constructor calls, or `match`
+      (silent no-op); programs using them need `lamo run`/`build`. Adding
+      an `EVAL_VAL_ENUM` representation is the prerequisite (SPEC §10.7).
+- [ ] **run_tests.ps1 remaining sections** — the eval section landed in
+      2.7.0; smoke, golden, std sections and runtime `.stdin` support are
+      still POSIX-only.
+- [ ] **Match literal patterns** — `match x { 1 => ..., "a" => ... }`
+      (SPEC §4.6/§13); guard-aware exhaustiveness is in, literals are not.
+- [ ] **Match as an expression** — `let x = match ... { ... }` needs value
+      threading through all three backends (SPEC §13).
+- [ ] **Enum annotation type-arg invariance at call sites** — annotated
+      enum params bind like generic signatures, but partially-inferable
+      multi-param enums (`enum E<T, U> { V(T) }`) degrade to the bare
+      enum name instead of a concrete full type.
+
+## Completed in 2.7.0
+
+Every item from the 2.6.0 Open Follow-Ups ledger, with evidence:
+
+| Item | Evidence |
+|------|----------|
+| **Enum type annotations** — `let o: Option<int> = ...`, enum-typed params/returns, for-lets, struct fields, enum payloads | SPEC §3.5; `annotation_resolve_full`/`annotation_to_type_with_ctx`/`lamo_validate_annotation_tree_cursor` enum-aware; `validate_enum_annotation` (arg-count + leaf validation); ctor calls stamp their concrete full type (`Some(42)` → `Option<int>`) and feed the §7.7 call-site binding machinery; `arg_concrete_full_type` descends unary/grouping exprs (`Some(-5)`); for-let annotations now use the recursive annotation parser; tests `tests/valid/enum_annotations.lamo`, `tests/runtime/enum_annotations.lamo`, smoke `err_enum_annotation_{mismatch,argcount,nongeneric}.*` |
+| **Pattern destructuring & guards** — nested payload patterns + `when` guards | SPEC §4.6; `LamoPattern` tree in the AST (`ASTMatchStmt` arms are (pattern, guard, body) triples); recursive `parse_pattern_ctx`; semantic recursive nested-pattern resolution + arity validation + bindings in extraction order + guard truthiness check; exhaustiveness counts only unguarded arms (Rust-style); codegen emits a per-match done-flag so failed nested tag checks / guards fall through to later arms (golden `tests/golden/match_tagged.c.expected`); tests `tests/runtime/enum_nested_patterns.lamo`, smoke `err_match_{nested_arity,guard_void}.*` |
+| **pub step 2** — non-`pub` via alias is a compile error | SPEC §10.6 step 2 landed; `semantic_error_module_export` (error + hint, once per member, both MEMBER_CALL and PROP_EXPR paths); the entire `std/` library (235 declarations), test fixtures, and example modules marked `pub`; smoke test migrated `warn_not_pub_member.expect_ok` → `.expect_err`; the REPL enforces the same boundary at lookup time (`src/eval/eval.c` private-member registry) since its module loads skip the semantic pass |
+| **Variant qualification** — `Enum::Variant` | SPEC §3.5; lexer `TOKEN_COLON_COLON`; qualified constructor calls (`Option::Some(5)`), qualified unit-variant values (`Option::None`), and qualified patterns (`Shape::Circle(r) =>`) all resolve exactly via `find_variant_qualified`; cross-enum collisions are now LEGAL ("later wins" defined, was a hard error) with a one-time shadow warning; variant globals deduped in generated C with later-wins initialization; untagged match arms compare the variant INDEX (collision-proof); fixed latent statement-position ctor bug (`Some(5);` used to emit a bogus call and fail the GCC backend); tests `tests/runtime/enum_qualified.lamo`, `tests/runtime/enum_variant_collision.lamo`, smoke `err_qualified_{variant_missing,unknown_enum}.*` |
+| **Windows eval/REPL parity checks** — run_tests.ps1 eval section | tests/run_tests.ps1 gained the §3.5 eval-cases section mirroring tests/run_tests.sh: `$EvalDir`, `Invoke-LamoRun` parameterized with the subcommand mode, empty-`.expected` guard (`modlib.expected`), `return` (not `continue`) inside `ForEach-Object`; developed on POSIX, so Windows execution remains CI-tested only by contributors with the OS at hand |
 
 ## Completed in 2.6.0
 

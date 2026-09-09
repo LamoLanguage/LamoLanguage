@@ -70,6 +70,43 @@ static const char* eval_module_prefixed_name(const char* alias, const char* memb
     return out;
 }
 
+/* ── 2.7.0 (pub step 2): REPL-side non-pub enforcement ──────────────
+ * `lamo eval <file>` runs the semantic pass first, so §10.6 step 2
+ * errors fire there. The interactive REPL, however, loads modules
+ * WITHOUT a semantic pass, so it must enforce the pub boundary itself:
+ * eval_load_module_program records every non-pub top-level fn/let
+ * under its prefixed name and the module-member lookups below reject
+ * them with the same message shape as the compiler. */
+#define EVAL_MAX_PRIVATE_MEMBERS 512
+static char* eval_private_members[EVAL_MAX_PRIVATE_MEMBERS];
+static int eval_private_member_count = 0;
+
+static void eval_register_private_member(const char* prefixed_name) {
+    if (!prefixed_name) return;
+    if (eval_private_member_count >= EVAL_MAX_PRIVATE_MEMBERS) return;
+    for (int i = 0; i < eval_private_member_count; i++) {
+        if (strcmp(eval_private_members[i], prefixed_name) == 0) return;
+    }
+    eval_private_members[eval_private_member_count++] = strdup(prefixed_name);
+}
+
+static int eval_member_is_private(const char* prefixed_name) {
+    if (!prefixed_name) return 0;
+    for (int i = 0; i < eval_private_member_count; i++) {
+        if (strcmp(eval_private_members[i], prefixed_name) == 0) return 1;
+    }
+    return 0;
+}
+
+static void eval_report_private_member(const char* alias, const char* member,
+                                       int line) {
+    fprintf(stderr,
+            "<repl>:%d:1: semantic error: member '%s' of module '%s' is not marked 'pub' "
+            "and cannot be accessed through the module alias (§10.6 step 2, enforced in 2.7.0)\n"
+            "hint: add 'pub' to the declaration of '%s' in the module file to export it explicitly\n",
+            line, member ? member : "", alias ? alias : "", member ? member : "");
+}
+
 /* ── Environment ─────────────────────────────────────────────────────── */
 
 typedef struct EvalBinding {
@@ -408,6 +445,13 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
             if (pe->object && pe->object->type == AST_IDENTIFIER) {
                 const char* prefixed = eval_module_prefixed_name(
                     ((ASTIdentifier*)pe->object)->name, pe->prop_name);
+                /* 2.7.0 (pub step 2): non-pub module globals are private. */
+                if (eval_member_is_private(prefixed)) {
+                    eval_report_private_member(((ASTIdentifier*)pe->object)->name,
+                                               pe->prop_name, node->line);
+                    *sig = EVAL_SIG_ERROR;
+                    return eval_error();
+                }
                 if (eval_env_get(env, prefixed, &obj)) {
                     return obj;
                 }
@@ -442,6 +486,12 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
             if (mc->object && mc->object->type == AST_IDENTIFIER) {
                 const char* alias = ((ASTIdentifier*)mc->object)->name;
                 const char* prefixed = eval_module_prefixed_name(alias, mc->member_name);
+                /* 2.7.0 (pub step 2): non-pub module functions are private. */
+                if (eval_member_is_private(prefixed)) {
+                    eval_report_private_member(alias, mc->member_name, node->line);
+                    *sig = EVAL_SIG_ERROR;
+                    return eval_error();
+                }
                 EvalEnv* closure = NULL;
                 if (eval_env_find_fn(env, prefixed, &closure)) {
                     return eval_call(prefixed, mc->args, mc->arg_count, env, sig, node->line);
@@ -745,6 +795,12 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
             if (mc->object && mc->object->type == AST_IDENTIFIER) {
                 const char* alias = ((ASTIdentifier*)mc->object)->name;
                 const char* prefixed = eval_module_prefixed_name(alias, mc->member_name);
+                /* 2.7.0 (pub step 2): non-pub module functions are private. */
+                if (eval_member_is_private(prefixed)) {
+                    eval_report_private_member(alias, mc->member_name, node->line);
+                    *sig = EVAL_SIG_ERROR;
+                    return eval_error();
+                }
                 EvalEnv* closure = NULL;
                 if (eval_env_find_fn(env, prefixed, &closure)) {
                     EvalValue result = eval_call(prefixed, mc->args, mc->arg_count, env, sig, node->line);
@@ -885,6 +941,19 @@ int eval_program(ASTProgram* program, EvalEnv* env) {
  * Imports inside the module were resolved by the caller's loader pass.
  * Returns 0 on a module-level runtime error, 1 on success. */
 int eval_load_module_program(ASTProgram* program, EvalEnv* env) {
+    /* 2.7.0 (pub step 2): record non-pub top-level members as private
+     * so the lookups above reject them. Declaration names are ALREADY
+     * prefixed by the loader (lamo_mod_<alias>__<name>). */
+    for (ASTNode* n = program->declarations; n; n = n->next) {
+        if (n->type == AST_FN_DECL || n->type == AST_VAR_DECL) {
+            if (!n->is_pub) {
+                const char* renamed = (n->type == AST_FN_DECL)
+                    ? ((ASTFnDecl*)n)->name
+                    : ((ASTVarDecl*)n)->name;
+                eval_register_private_member(renamed);
+            }
+        }
+    }
     for (ASTNode* n = program->declarations; n; n = n->next) {
         if (n->type == AST_FN_DECL) {
             ASTFnDecl* fn = (ASTFnDecl*)n;

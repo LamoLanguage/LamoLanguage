@@ -29,6 +29,14 @@ track *what it means*.
 
 ## Release Highlights
 
+**2.7.0** — the 2.6.0 Open Follow-Ups ledger closed: enum type annotations
+(`let o: Option<int>`, params/returns/fields with arg-count validation and
+ctor full-type inference), nested payload patterns + `when` guards in
+`match` (guarded arms excluded from exhaustiveness), `Enum::Variant`
+qualification with cross-enum "later wins" collisions defined as legal,
+`pub` step 2 enforced (non-`pub` via alias is a compile error, REPL
+included), and the eval-cases section added to `run_tests.ps1`.
+
 **2.6.0** — the entire Open Follow-Ups ledger closed: tagged-union enums
 (`Some(x) =>` bindings), module-boundary struct type flow, explicit type
 arguments on module member calls, the boolean print form decision
@@ -66,24 +74,22 @@ CLI refactor into `src/cli/`.
 | 7 | Language features & generics | ✅ Done — generics PRs 1–6 shipped (2.5.0) |
 | 8 | Standard library | ✅ Done — 15 modules + organization rules |
 | 9 | Developer experience | ✅ Done — REPL, scaffolding, hints, color, formatter |
-| 10 | Multi-file projects | ✅ Done — module rules closed in 2.6.0 ([SPEC §10](docs/SPEC.md)) |
+| 10 | Multi-file projects | ✅ Done — module rules closed in 2.6.0; `pub` boundary enforced in 2.7.0 ([SPEC §10](docs/SPEC.md)) |
 | 11 | Backend evolution | ✅ Done — annotated-AST contract; VM/LLVM deferred with preconditions |
 
 Per-item detail lives in [`todo.md`](todo.md).
 
 ## Current Priorities
 
-The next meaningful work, in suggested order (the 2.5.0 follow-up ledger is
-closed — see the new [todo.md](todo.md) Open Follow-Ups for what 2.6.0
+The next meaningful work, in suggested order (the 2.6.0 follow-up ledger is
+closed — see the new [todo.md](todo.md) Open Follow-Ups for what 2.7.0
 discovered):
 
-1. **Enum type annotations** — `Option<int>` in let/param/return positions
-   (the tagged-enum runtime landed in 2.6.0; the annotation resolver needs
-   an enum-aware arm).
-2. **Pattern destructuring & guards** — nested payloads and `when` clauses
-   in `match`.
-3. **pub step 2** — enforce the §10.6 boundary after one release of
-   step-1 warnings.
+1. **Eval/REPL enum support** — an `EVAL_VAL_ENUM` representation so the
+   interpreter can run enums/`match` like the C backend.
+2. **Windows runner completion** — smoke/golden/std sections and `.stdin`
+   support for `run_tests.ps1` (the eval section landed in 2.7.0).
+3. **Match literal patterns** and **match as an expression**.
 4. **Traits** — first-class constraints beyond the catalogue.
 5. **Better formatter** (AST-based pretty-printer), **LSP**, **VSCode
    extension**, **documentation website**.
@@ -113,7 +119,6 @@ Lamo becomes a real language when:
 - editor support (LSP, VSCode extension)
 - optimization passes
 - generational / incremental / concurrent GC
-- `pub` visibility keyword
 - string interpolation
 
 ## Final Note

@@ -34,6 +34,7 @@ $TestsDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ValidDir   = Join-Path $TestsDir "valid"
 $InvalidDir = Join-Path $TestsDir "invalid"
 $RuntimeDir = Join-Path $TestsDir "runtime"
+$EvalDir    = Join-Path $TestsDir "eval"
 
 $script:Pass = 0
 $script:Fail = 0
@@ -54,17 +55,19 @@ function Invoke-LamoCheck([string]$file) {
     return ($LASTEXITCODE -eq 0)
 }
 
-function Invoke-LamoRun([string]$file, [ref]$stdoutOut, [ref]$stderrOut) {
+function Invoke-LamoRun([string]$file, [ref]$stdoutOut, [ref]$stderrOut, [string]$Mode = "run") {
     # Sprint 1 fix: cap runtime tests at 10 seconds so a runaway Lamo
     # program (e.g. infinite loop) cannot hang the test suite. We use a
     # background job + Wait-Job -Timeout 10; on timeout we kill the job
     # and treat it as a failure.
+    # 2.7.0 (FU5): $Mode selects the subcommand — "run" for the runtime
+    # suite or "eval" for the interpreter suite (SPEC §10.7 parity).
     $stdout = ""
     $stderr = ""
     $job = Start-Job -ScriptBlock {
-        param($lamo, $file)
-        & $lamo run $file 2>&1
-    } -ArgumentList $LamoPath, $file
+        param($lamo, $file, $mode)
+        & $lamo $mode $file 2>&1
+    } -ArgumentList $LamoPath, $file, $Mode
 
     if (Wait-Job $job -Timeout 10) {
         # Job finished within the timeout. Collect output.
@@ -160,6 +163,51 @@ if (Test-Path $RuntimeDir) {
         } else {
             Record-Fail ("runtime/" + $name + " (run failed)")
             Write-Host ("  FAIL  " + $name + " (run failed)")
+            Write-Host ("        " + $stderrRef.Value)
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 3.5 Eval cases (2.7.0 FU5): must `lamo eval` and produce stdout matching
+#     the sibling .expected file. Mirrors the eval section of
+#     tests/run_tests.sh (SPEC §10.7 interpreter module parity). Only
+#     stdout is diffed; stderr is surfaced when the case fails.
+# ---------------------------------------------------------------------------
+Write-Host ""
+Write-Host "== Eval cases (interpreter; must match expected stdout) =="
+if (Test-Path $EvalDir) {
+    Get-ChildItem -Path $EvalDir -Filter *.lamo | ForEach-Object {
+        $name = $_.Name
+        $expectedFile = [System.IO.Path]::ChangeExtension($_.FullName, ".expected")
+        if (-not (Test-Path $expectedFile)) {
+            Record-Fail ("eval/" + $name + " (missing .expected file)")
+            Write-Host ("  FAIL  " + $name + " (missing .expected file)")
+            return
+        }
+        $stdoutRef = [ref]""
+        $stderrRef = [ref]""
+        if (Invoke-LamoRun $_.FullName $stdoutRef $stderrRef -Mode "eval") {
+            # Coerce with [string] — an EMPTY .expected (e.g. modlib.expected)
+            # makes Get-Content -Raw return $null, whose .EndsWith would throw.
+            $expected = [string](Get-Content -Raw $expectedFile)
+            $expected = $expected -replace "`r`n", "`n"
+            $actual = ($stdoutRef.Value -join "`n") -replace "`r`n", "`n"
+            # Normalize trailing newline
+            if (-not $expected.EndsWith("`n")) { $expected += "`n" }
+            if (-not $actual.EndsWith("`n")) { $actual += "`n" }
+            if ($expected -eq $actual) {
+                Record-Pass
+                Write-Host ("  PASS  " + $name)
+            } else {
+                Record-Fail ("eval/" + $name + " (stdout mismatch)")
+                Write-Host ("  FAIL  " + $name + " (stdout mismatch)")
+                Write-Host ("        expected: $expected")
+                Write-Host ("        actual:   $actual")
+            }
+        } else {
+            Record-Fail ("eval/" + $name + " (eval failed)")
+            Write-Host ("  FAIL  " + $name + " (eval failed)")
             Write-Host ("        " + $stderrRef.Value)
         }
     }

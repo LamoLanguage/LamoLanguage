@@ -1,8 +1,8 @@
 // Helper module for bare-import tests (second alias).
-fn double(n) {
+pub fn double(n) {
     return n * 2
 }
 
-fn greet(name) {
+pub fn greet(name) {
     return "hello " + name
 }

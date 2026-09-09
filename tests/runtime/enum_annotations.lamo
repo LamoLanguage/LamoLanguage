@@ -1,0 +1,35 @@
+// 2.7.0 (FU1): enum-typed annotations drive compile-time checks while
+// the runtime representation stays the erased tagged value.
+enum Option<T> { Some(T), None }
+enum Shape { Circle(int), Square(int) }
+
+fn unwrap_or(o: Option<int>, d: int) -> int {
+    match o {
+        Some(v) when v > 0 => return v,
+        Some(_) => return d,
+        None => return d,
+    }
+    return d
+}
+
+fn negate(s: Shape) -> Shape {
+    match s {
+        Shape::Circle(r) => return Shape::Square(r),
+        Shape::Square(w) => return Shape::Circle(w),
+    }
+    return s
+}
+
+fn main() {
+    let a: Option<int> = Some(42);
+    let b: Option<int> = None;
+    print(a);
+    print(b);
+    print(unwrap_or(a, -1));
+    print(unwrap_or(b, -1));
+    let s: Shape = Circle(3);
+    print(negate(s));
+    let arr: array<Option<int>> = [Some(1), None];
+    print(arr.len());
+    print(arr[0]);
+}

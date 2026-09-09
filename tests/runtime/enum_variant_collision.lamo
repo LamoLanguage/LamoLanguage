@@ -1,0 +1,20 @@
+// 2.7.0 (FU4): cross-enum variant-name collisions are legal ("later
+// wins", SPEC §3.5); qualification disambiguates. The shadowing
+// warnings go to stderr and are ignored by the runtime diff.
+enum First { Item, Start }
+enum Second { Item(int), Start }
+
+fn main() {
+    print(First::Item);
+    print(Second::Item(9));
+    print(Second::Start);
+    match Second::Item(41) {
+        Second::Item(v) => print("second " + v),
+        Second::Start => print("second start"),
+        _ => print("?"),
+    }
+    match First::Item {
+        First::Item => print("first item"),
+        First::Start => print("first start"),
+    }
+}

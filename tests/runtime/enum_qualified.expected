@@ -1,0 +1,6 @@
+Some(5)
+Ok(1)
+Err(boom)
+None
+err x
+some 5

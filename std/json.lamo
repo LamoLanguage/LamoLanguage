@@ -23,11 +23,11 @@
 //   print(json.getString(v, "name"))   // "lamo"
 //   print(json.getInt(v, "version"))   // 1
 
-let _NULL_SENTINEL = -1
+pub let _NULL_SENTINEL = -1
 
 // ─── Parser helpers (all take a state [text, pos] and mutate state[1]) ──
 
-fn _peek(state) {
+pub fn _peek(state) {
     let text = state[0]
     let pos = state[1]
     if (pos < __lamo_std_str_length(text)) {
@@ -36,12 +36,12 @@ fn _peek(state) {
     return ""
 }
 
-fn _advance(state) {
+pub fn _advance(state) {
     state[1] = state[1] + 1
     return 0
 }
 
-fn _skipWhitespace(state) {
+pub fn _skipWhitespace(state) {
     let text = state[0]
     while (state[1] < __lamo_std_str_length(text)) {
         let c = __lamo_std_str_char_at(text, state[1])
@@ -54,7 +54,7 @@ fn _skipWhitespace(state) {
     return 0
 }
 
-fn _isDigit(c) {
+pub fn _isDigit(c) {
     if (c == "0") { return 1 }
     if (c == "1") { return 1 }
     if (c == "2") { return 1 }
@@ -68,7 +68,7 @@ fn _isDigit(c) {
     return 0
 }
 
-fn _isNumberChar(c) {
+pub fn _isNumberChar(c) {
     if (_isDigit(c)) { return 1 }
     if (c == "-") { return 1 }
     if (c == "+") { return 1 }
@@ -78,7 +78,7 @@ fn _isNumberChar(c) {
     return 0
 }
 
-fn _digitToInt(c) {
+pub fn _digitToInt(c) {
     if (c == "0") { return 0 }
     if (c == "1") { return 1 }
     if (c == "2") { return 2 }
@@ -92,14 +92,14 @@ fn _digitToInt(c) {
     return 0
 }
 
-fn _isFloat(s) {
+pub fn _isFloat(s) {
     if (__lamo_std_str_contains(s, ".")) { return 1 }
     if (__lamo_std_str_contains(s, "e")) { return 1 }
     if (__lamo_std_str_contains(s, "E")) { return 1 }
     return 0
 }
 
-fn _parseInt(s) {
+pub fn _parseInt(s) {
     let n = __lamo_std_str_length(s)
     if (n == 0) { return 0 }
     let i = 0
@@ -120,7 +120,7 @@ fn _parseInt(s) {
     return value * sign
 }
 
-fn _parseValue(state) {
+pub fn _parseValue(state) {
     _skipWhitespace(state)
     let c = _peek(state)
     if (c == "{") { return _parseObject(state) }
@@ -131,7 +131,7 @@ fn _parseValue(state) {
     return _parseNumber(state)
 }
 
-fn _parseObject(state) {
+pub fn _parseObject(state) {
     _advance(state)  // skip '{'
     let ks = []
     let vs = []
@@ -163,7 +163,7 @@ fn _parseObject(state) {
     return [ks, vs]
 }
 
-fn _parseArray(state) {
+pub fn _parseArray(state) {
     _advance(state)  // skip '['
     let arr = []
     _skipWhitespace(state)
@@ -189,7 +189,7 @@ fn _parseArray(state) {
     return arr
 }
 
-fn _parseString(state) {
+pub fn _parseString(state) {
     _advance(state)  // skip opening quote
     let text = state[0]
     let result = ""
@@ -218,7 +218,7 @@ fn _parseString(state) {
     return result
 }
 
-fn _parseNumber(state) {
+pub fn _parseNumber(state) {
     let text = state[0]
     let start = state[1]
     while (state[1] < __lamo_std_str_length(text)) {
@@ -236,7 +236,7 @@ fn _parseNumber(state) {
     return _parseInt(s)
 }
 
-fn _parseBool(state) {
+pub fn _parseBool(state) {
     let text = state[0]
     let rest = __lamo_std_str_substring(text, state[1], -1)
     if (__lamo_std_str_starts_with(rest, "true")) {
@@ -250,7 +250,7 @@ fn _parseBool(state) {
     return 0
 }
 
-fn _parseNull(state) {
+pub fn _parseNull(state) {
     let text = state[0]
     let rest = __lamo_std_str_substring(text, state[1], -1)
     if (__lamo_std_str_starts_with(rest, "null")) {
@@ -260,7 +260,7 @@ fn _parseNull(state) {
 }
 
 // parse(text) — parse a JSON string into Lamo values.
-fn parse(text) {
+pub fn parse(text) {
     let state = [text, 0]
     return _parseValue(state)
 }
@@ -269,7 +269,7 @@ fn parse(text) {
 // Objects are represented as [keys_array, values_array]. These helpers
 // hide that representation from the user.
 
-fn _findKey(obj, key) {
+pub fn _findKey(obj, key) {
     let ks = obj[0]
     let i = 0
     while (i < ks.len()) {
@@ -279,46 +279,46 @@ fn _findKey(obj, key) {
     return -1
 }
 
-fn get(obj, key) {
+pub fn get(obj, key) {
     let i = _findKey(obj, key)
     if (i < 0) { return _NULL_SENTINEL }
     let vs = obj[1]
     return vs[i]
 }
 
-fn getString(obj, key) {
+pub fn getString(obj, key) {
     return get(obj, key)
 }
 
-fn getInt(obj, key) {
+pub fn getInt(obj, key) {
     return get(obj, key)
 }
 
-fn has(obj, key) {
+pub fn has(obj, key) {
     if (_findKey(obj, key) < 0) { return 0 }
     return 1
 }
 
-fn keys(obj) {
+pub fn keys(obj) {
     return obj[0]
 }
 
-fn values(obj) {
+pub fn values(obj) {
     return obj[1]
 }
 
-fn len(obj) {
+pub fn len(obj) {
     let ks = obj[0]
     return ks.len()
 }
 
 // ─── Stringify ───────────────────────────────────────────────────────
 
-fn stringify(value) {
+pub fn stringify(value) {
     return _stringifyValue(value)
 }
 
-fn _isJsonObject(value) {
+pub fn _isJsonObject(value) {
     if (isarray(value) == 0) { return 0 }
     if (value.len() != 2) { return 0 }
     if (isarray(value[0]) == 0) { return 0 }
@@ -326,7 +326,7 @@ fn _isJsonObject(value) {
     return 1
 }
 
-fn _stringifyValue(value) {
+pub fn _stringifyValue(value) {
     if (isstring(value)) {
         return _stringifyString(value)
     }
@@ -364,7 +364,7 @@ fn _stringifyValue(value) {
     return "null"
 }
 
-fn _stringifyString(s) {
+pub fn _stringifyString(s) {
     let result = "\""
     let i = 0
     let n = __lamo_std_str_length(s)

@@ -1,0 +1,5 @@
+enum Option<T> { Some(T), None }
+fn main() {
+    let x = Option::Nope(1);
+    print(x)
+}

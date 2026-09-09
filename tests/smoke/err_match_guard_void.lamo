@@ -1,0 +1,9 @@
+enum Option<T> { Some(T), None }
+fn nothing() -> void {}
+fn main() {
+    let v = Some(1);
+    match v {
+        Some(x) when nothing() => print(x),
+        _ => print("?"),
+    }
+}

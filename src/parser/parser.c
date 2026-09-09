@@ -742,6 +742,45 @@ static ASTNode* parse_primary(Parser* p) {
         int column = p->current.column;
         advance_p(p);
 
+        /* 2.7.0 (FU4): qualified variant — `Enum::Variant` as a value or
+         * `Enum::Variant(args)` as a constructor call. A `::`-qualified
+         * name can never be a plain variable, so this branch runs before
+         * every other form. The call form reuses AST_CALL_EXPR with the
+         * compound name "Enum::Variant" (the semantic pass splits it);
+         * the value form becomes AST_VARIANT_REF. */
+        if (p->current.type == TOKEN_COLON_COLON) {
+            advance_p(p);
+            if (p->current.type != TOKEN_IDENTIFIER) {
+                parser_error(p, "expected variant name after '::'");
+                free(name);
+                return parser_recover(p);
+            }
+            char* variant = strdup(p->current.value);
+            advance_p(p);
+            if (p->current.type == TOKEN_LPAREN) {
+                int arg_count = 0;
+                ASTNode** args = NULL;
+                if (!parse_paren_args(p, &args, &arg_count)) {
+                    free(variant); free(name);
+                    return parser_recover(p);
+                }
+                char* compound = malloc(strlen(name) + 2 + strlen(variant) + 1);
+                if (!compound) {
+                    parser_error(p, "out of memory while building qualified variant call");
+                    free(variant); free(name);
+                    return parser_recover(p);
+                }
+                sprintf(compound, "%s::%s", name, variant);
+                ASTNode* node = (ASTNode*)ast_new_call_expr(compound, args, arg_count, line, column);
+                free(compound); free(variant); free(name);
+                return node;
+            }
+            ASTNode* node = (ASTNode*)ast_new_variant_ref(name, variant, line, column);
+            free(variant);
+            free(name);
+            return node;
+        }
+
         /* Generics PR 1 (rewritten in PR 2): optional type argument list
          * for struct literals, parsed when lookahead confirms
          * `Foo<...> {`. The lookahead is necessary because `Foo < bar`
@@ -1099,6 +1138,140 @@ ASTNode* parse_expression(Parser* p) {
 }
 
 ASTNode* parse_statement(Parser* p);
+
+/* 2.7.0 (FU2/FU4): one-token lookahead without consuming. Used by the
+ * `when` guard detection (`when` is contextual: a variant may be named
+ * `when`, so `when => ...` must NOT start a guard — only
+ * `when <expr> =>` does). Same save/restore scheme as
+ * probe_angle_type_list. */
+static LamoTokenType parser_peek_next_type(Parser* p) {
+    Lexer* l = p->lexer;
+    int saved_pos = l->pos;
+    int saved_line = l->line;
+    int saved_column = l->column;
+    Token nxt = lexer_next_token(l);
+    LamoTokenType t = nxt.type;
+    token_free(nxt);
+    l->pos = saved_pos;
+    l->line = saved_line;
+    l->column = saved_column;
+    return t;
+}
+
+/* 2.7.0 (FU2/FU4): recursive match-pattern parser (SPEC §4.6).
+ *
+ * Grammar:
+ *   pattern      := '_'
+ *                 | IDENT [ '::' IDENT ] [ '(' pattern-list ')' ]
+ *   pattern-list := pattern (',' pattern)*
+ *
+ * - `_`                            wildcard leaf (any depth)
+ * - IDENT (nested, no parens/'::') BINDING leaf (e.g. the `a` in Some(a))
+ * - IDENT (top level, no parens)   unit-variant constructor pattern
+ * - IDENT '(' ... ')'              constructor pattern with payloads
+ * - IDENT '::' IDENT [ '(' ... ')' ]  qualified variant constructor
+ *                                    (never a binding — a `::` name is
+ *                                    unambiguously a variant)
+ *
+ * `nested` is 0 for the arm's top-level pattern, 1 inside payload
+ * parens. Returns a malloc'd LamoPattern owned by the caller (NULL +
+ * registered error on failure; caller recovers). */
+static LamoPattern* parse_pattern_ctx(Parser* p, int nested) {
+    if (p->current.type != TOKEN_IDENTIFIER) {
+        parser_error(p, "expected pattern (variant name, binding, or '_') in match arm");
+        return NULL;
+    }
+    char* first = strdup(p->current.value);
+    int line = p->current.line;
+    int column = p->current.column;
+    advance_p(p);
+
+    /* Wildcard. */
+    if (strcmp(first, "_") == 0) {
+        free(first);
+        if (p->current.type == TOKEN_LPAREN) {
+            parser_error(p, "wildcard pattern '_' cannot bind payloads (remove the '(...)')");
+            return NULL;
+        }
+        return ast_pattern_wildcard(line, column);
+    }
+
+    /* Qualified variant — `Enum::Variant` (2.7.0 FU4). */
+    int qualified = 0;
+    if (p->current.type == TOKEN_COLON_COLON) {
+        advance_p(p);
+        if (p->current.type != TOKEN_IDENTIFIER) {
+            parser_error(p, "expected variant name after '::' in match pattern");
+            free(first);
+            return NULL;
+        }
+        char* qual = malloc(strlen(first) + 2 + strlen(p->current.value) + 1);
+        if (!qual) {
+            parser_error(p, "out of memory while building qualified pattern name");
+            free(first);
+            return NULL;
+        }
+        sprintf(qual, "%s::%s", first, p->current.value);
+        advance_p(p);
+        free(first);
+        first = qual;  /* compound name "Enum::Variant" */
+        qualified = 1;
+    }
+
+    /* Optional payload sub-pattern list. */
+    LamoPattern** children = NULL;
+    int child_count = 0;
+    if (p->current.type == TOKEN_LPAREN) {
+        advance_p(p);
+        while (p->current.type != TOKEN_RPAREN && p->current.type != TOKEN_EOF) {
+            LamoPattern* child = parse_pattern_ctx(p, 1);
+            if (!child) {
+                free(first);
+                for (int i = 0; i < child_count; i++) ast_pattern_free(children[i]);
+                free(children);
+                return NULL;
+            }
+            LamoPattern** grown = realloc(children, sizeof(LamoPattern*) * (size_t)(child_count + 1));
+            if (!grown) {
+                parser_error(p, "out of memory while growing pattern list");
+                ast_pattern_free(child);
+                free(first);
+                for (int i = 0; i < child_count; i++) ast_pattern_free(children[i]);
+                free(children);
+                return NULL;
+            }
+            children = grown;
+            children[child_count++] = child;
+            if (p->current.type == TOKEN_COMMA) advance_p(p);
+            else break;
+        }
+        expect_p(p, TOKEN_RPAREN, "missing ')' after pattern payloads");
+        if (p->panic_mode) {
+            free(first);
+            for (int i = 0; i < child_count; i++) ast_pattern_free(children[i]);
+            free(children);
+            return NULL;
+        }
+    }
+
+    /* Decide the kind: parens or qualification make it a constructor
+     * pattern in any position; a bare nested identifier is a binding;
+     * a bare top-level identifier is a unit-variant pattern. Both
+     * constructors copy `first`, so free it either way. */
+    if (!qualified && child_count == 0 && nested) {
+        LamoPattern* binding = ast_pattern_binding(first, line, column);
+        free(first);
+        return binding;
+    }
+    LamoPattern* ctor = ast_pattern_ctor(first, children, child_count, line, column);
+    free(first);
+    return ctor;
+}
+
+/* Top-level entry (arm pattern). */
+static LamoPattern* parse_pattern(Parser* p) {
+    return parse_pattern_ctx(p, 0);
+}
 
 static ASTNode* parse_block(Parser* p) {
     int line = p->current.line;
@@ -1823,188 +1996,124 @@ ASTNode* parse_statement(Parser* p) {
         ASTNode* scrutinee = parse_expression(p);
         p->no_struct_literal = 0;
         expect_p(p, TOKEN_LBRACE, "expected '{' to open match body");
-        char** patterns = NULL;
-        int* pattern_is_wildcard = NULL;
+        /* 2.7.0 (FU2): each arm is a (pattern tree, guard, body) triple.
+         * Patterns are parsed by the recursive parse_pattern_ctx so
+         * nested payloads (`Some(Pair(a, b))`) work; guards are the
+         * optional `when <expr>` between the pattern and `=>`. */
+        LamoPattern** patterns = NULL;
+        ASTNode** guards = NULL;
         ASTNode** bodies = NULL;
-        /* 2.6.0: optional payload-binding lists per arm (`Some(x) =>`). */
-        char*** bindings = NULL;
-        int* binding_counts = NULL;
         int arm_count = 0;
         while (p->current.type != TOKEN_RBRACE && p->current.type != TOKEN_EOF) {
-            char* pat = NULL;
-            int is_wild = 0;
-            char** binds = NULL;
-            int bcount = 0;
-            if (p->current.type == TOKEN_IDENTIFIER) {
-                /* "_" is the wildcard pattern (we read it as an identifier
-                 * since the lexer doesn't have a special token for it). */
-                if (strcmp(p->current.value, "_") == 0) {
-                    is_wild = 1;
-                    pat = strdup("_");
-                } else {
-                    pat = strdup(p->current.value);
+            LamoPattern* pat = parse_pattern(p);
+            if (!pat) {
+                for (int i = 0; i < arm_count; i++) {
+                    ast_pattern_free(patterns[i]);
+                    if (guards[i]) ast_free(guards[i]);
+                    ast_free(bodies[i]);
                 }
-                eat_p(p, TOKEN_IDENTIFIER);
-                /* 2.6.0: optional payload-binding list — `Some(x, y)`.
-                 * Only meaningful for tagged-union enums; validated by
-                 * the semantic pass against the matched enum's variant. */
-                if (p->current.type == TOKEN_LPAREN) {
-                    advance_p(p);  /* consume '(' */
-                    while (p->current.type != TOKEN_RPAREN && p->current.type != TOKEN_EOF) {
-                        if (p->current.type != TOKEN_IDENTIFIER) {
-                            parser_error(p, "expected binding name in match pattern");
-                            free(pat);
-                            for (int j = 0; j < bcount; j++) free(binds[j]);
-                            free(binds);
-                            for (int i = 0; i < arm_count; i++) {
-                                free(patterns[i]); ast_free(bodies[i]);
-                                if (bindings && bindings[i]) {
-                                    for (int j2 = 0; j2 < binding_counts[i]; j2++) free(bindings[i][j2]);
-                                    free(bindings[i]);
-                                }
-                            }
-                            free(patterns); free(pattern_is_wildcard); free(bodies);
-                            free(bindings); free(binding_counts);
-                            ast_free(scrutinee);
-                            return parser_recover(p);
-                        }
-                        {
-                            char* b = strdup(p->current.value);
-                            char** resized = realloc(binds, sizeof(char*) * (size_t)(bcount + 1));
-                            if (!resized) {
-                                parser_error(p, "out of memory while growing pattern binding list");
-                                free(b);
-                                for (int j = 0; j < bcount; j++) free(binds[j]);
-                                free(binds);
-                                free(pat);
-                                for (int i = 0; i < arm_count; i++) {
-                                    free(patterns[i]); ast_free(bodies[i]);
-                                    if (bindings && bindings[i]) {
-                                        for (int j2 = 0; j2 < binding_counts[i]; j2++) free(bindings[i][j2]);
-                                        free(bindings[i]);
-                                    }
-                                }
-                                free(patterns); free(pattern_is_wildcard); free(bodies);
-                                free(bindings); free(binding_counts);
-                                ast_free(scrutinee);
-                                return parser_recover(p);
-                            }
-                            binds = resized;
-                            binds[bcount++] = b;
-                        }
-                        eat_p(p, TOKEN_IDENTIFIER);
-                        if (p->current.type == TOKEN_COMMA) advance_p(p);
-                    }
-                    expect_p(p, TOKEN_RPAREN, "missing ')' after pattern bindings");
-                }
-            } else {
-                parser_error(p, "expected pattern (variant name or '_') in match arm");
-                free(pat);
-                for (int j = 0; j < bcount; j++) free(binds[j]);
-                free(binds);
-                for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
-                free(patterns); free(pattern_is_wildcard); free(bodies);
+                free(patterns); free(guards); free(bodies);
                 ast_free(scrutinee);
                 return parser_recover(p);
             }
+            /* 2.7.0 (FU2): optional `when` guard. `when` is contextual
+             * (SPEC §4.6): it starts a guard only when an expression
+             * follows — `when => ...` still parses `when` as a variant
+             * name (handled above by parse_pattern_ctx) and a trailing
+             * `when` before ',' or '}' cannot start a guard either. */
+            ASTNode* guard = NULL;
+            if (p->current.type == TOKEN_IDENTIFIER &&
+                strcmp(p->current.value, "when") == 0) {
+                LamoTokenType after = parser_peek_next_type(p);
+                if (after != TOKEN_FAT_ARROW && after != TOKEN_COMMA &&
+                    after != TOKEN_RBRACE && after != TOKEN_EOF) {
+                    advance_p(p);  /* consume 'when' */
+                    guard = parse_expression(p);
+                }
+            }
             expect_p(p, TOKEN_FAT_ARROW, "expected '=>' in match arm");
+            if (p->panic_mode && !guard) {
+                ast_pattern_free(pat);
+                for (int i = 0; i < arm_count; i++) {
+                    ast_pattern_free(patterns[i]);
+                    if (guards[i]) ast_free(guards[i]);
+                    ast_free(bodies[i]);
+                }
+                free(patterns); free(guards); free(bodies);
+                ast_free(scrutinee);
+                return parser_recover(p);
+            }
             /* Arm body: parse a single statement. We use parse_statement
              * so the user can write `Red => print("red");` or
              * `Red => { print("red"); print("!"); }`. */
             ASTNode* body = parse_statement(p);
-            /* Grow arrays. Realloc one at a time and assign back
-             * immediately to avoid -Wuse-after-free. */
             {
-                char** p_r = realloc(patterns, sizeof(char*) * (size_t)(arm_count + 1));
+                LamoPattern** p_r = realloc(patterns, sizeof(LamoPattern*) * (size_t)(arm_count + 1));
                 if (!p_r) {
                     parser_error(p, "out of memory while growing match arm list");
-                    free(pat); ast_free(body);
-                    for (int j = 0; j < bcount; j++) free(binds[j]);
-                    free(binds);
-                    for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
-                    free(patterns); free(pattern_is_wildcard); free(bodies);
+                    ast_pattern_free(pat);
+                    if (guard) ast_free(guard);
+                    ast_free(body);
+                    for (int i = 0; i < arm_count; i++) {
+                        ast_pattern_free(patterns[i]);
+                        if (guards[i]) ast_free(guards[i]);
+                        ast_free(bodies[i]);
+                    }
+                    free(patterns); free(guards); free(bodies);
                     ast_free(scrutinee);
                     return parser_recover(p);
                 }
                 patterns = p_r;
             }
             {
-                int* w_r = realloc(pattern_is_wildcard, sizeof(int) * (size_t)(arm_count + 1));
-                if (!w_r) {
+                ASTNode** g_r = realloc(guards, sizeof(ASTNode*) * (size_t)(arm_count + 1));
+                if (!g_r) {
                     parser_error(p, "out of memory while growing match arm list");
-                    free(pat); ast_free(body);
-                    for (int j = 0; j < bcount; j++) free(binds[j]);
-                    free(binds);
-                    for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
-                    free(patterns); free(pattern_is_wildcard); free(bodies);
+                    ast_pattern_free(pat);
+                    if (guard) ast_free(guard);
+                    ast_free(body);
+                    for (int i = 0; i < arm_count; i++) {
+                        ast_pattern_free(patterns[i]);
+                        if (guards[i]) ast_free(guards[i]);
+                        ast_free(bodies[i]);
+                    }
+                    free(patterns); free(guards); free(bodies);
                     ast_free(scrutinee);
                     return parser_recover(p);
                 }
-                pattern_is_wildcard = w_r;
+                guards = g_r;
             }
             {
                 ASTNode** b_r = realloc(bodies, sizeof(ASTNode*) * (size_t)(arm_count + 1));
                 if (!b_r) {
                     parser_error(p, "out of memory while growing match arm list");
-                    free(pat); ast_free(body);
-                    for (int j = 0; j < bcount; j++) free(binds[j]);
-                    free(binds);
-                    for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
-                    free(patterns); free(pattern_is_wildcard); free(bodies);
+                    ast_pattern_free(pat);
+                    if (guard) ast_free(guard);
+                    ast_free(body);
+                    for (int i = 0; i < arm_count; i++) {
+                        ast_pattern_free(patterns[i]);
+                        if (guards[i]) ast_free(guards[i]);
+                        ast_free(bodies[i]);
+                    }
+                    free(patterns); free(guards); free(bodies);
                     ast_free(scrutinee);
                     return parser_recover(p);
                 }
                 bodies = b_r;
             }
-            {
-                char*** bl_r = realloc(bindings, sizeof(char**) * (size_t)(arm_count + 1));
-                if (!bl_r) {
-                    parser_error(p, "out of memory while growing match arm list");
-                    free(pat); ast_free(body);
-                    for (int j = 0; j < bcount; j++) free(binds[j]);
-                    free(binds);
-                    for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
-                    free(patterns); free(pattern_is_wildcard); free(bodies);
-                    ast_free(scrutinee);
-                    return parser_recover(p);
-                }
-                bindings = bl_r;
-                int* bc_r = realloc(binding_counts, sizeof(int) * (size_t)(arm_count + 1));
-                if (!bc_r) {
-                    parser_error(p, "out of memory while growing match arm list");
-                    free(pat); ast_free(body);
-                    for (int j = 0; j < bcount; j++) free(binds[j]);
-                    free(binds);
-                    for (int i = 0; i < arm_count; i++) { free(patterns[i]); ast_free(bodies[i]); }
-                    free(patterns); free(pattern_is_wildcard); free(bodies);
-                    free(bindings);
-                    ast_free(scrutinee);
-                    return parser_recover(p);
-                }
-                binding_counts = bc_r;
-            }
             patterns[arm_count] = pat;
-            pattern_is_wildcard[arm_count] = is_wild;
+            guards[arm_count] = guard;
             bodies[arm_count] = body;
-            bindings[arm_count] = binds;
-            binding_counts[arm_count] = bcount;
             arm_count++;
             if (p->current.type == TOKEN_COMMA) advance_p(p);
         }
         expect_p(p, TOKEN_RBRACE, "missing '}' at end of match body");
         if (p->current.type == TOKEN_SEMICOLON) advance_p(p);
-        ASTNode* node = (ASTNode*)ast_new_match_stmt_full(scrutinee, patterns, pattern_is_wildcard,
-                                                           bindings, binding_counts,
+        ASTNode* node = (ASTNode*)ast_new_match_stmt_full(scrutinee, patterns, guards,
                                                            bodies, arm_count, line, column);
-        for (int i = 0; i < arm_count; i++) {
-            free(patterns[i]);
-            if (bindings && bindings[i]) {
-                for (int j = 0; j < binding_counts[i]; j++) free(bindings[i][j]);
-                free(bindings[i]);
-            }
-        }
-        free(patterns); free(pattern_is_wildcard); free(bodies);
-        free(bindings); free(binding_counts);
+        /* The AST deep-copied nothing — it took ownership of the trees,
+         * guards and bodies — so only the input ARRAYS are ours. */
+        free(patterns); free(guards); free(bodies);
         return node;
     }
     else if (p->current.type == TOKEN_IDENTIFIER) {
@@ -2012,6 +2121,43 @@ ASTNode* parse_statement(Parser* p) {
         int line = p->current.line;
         int column = p->current.column;
         advance_p(p);
+
+        /* 2.7.0 (FU4): qualified variant constructor call statement —
+         * `Enum::Variant(args);`. Only the call form is meaningful in
+         * statement position (a bare qualified value has no effect).
+         * Reuses AST_CALL_STMT with the compound "Enum::Variant" name. */
+        if (p->current.type == TOKEN_COLON_COLON) {
+            advance_p(p);
+            if (p->current.type != TOKEN_IDENTIFIER) {
+                parser_error(p, "expected variant name after '::'");
+                free(name);
+                return parser_recover(p);
+            }
+            char* variant = strdup(p->current.value);
+            advance_p(p);
+            if (p->current.type != TOKEN_LPAREN) {
+                parser_error(p, "expected '(' after qualified variant in statement position (Enum::Variant is a constructor, not a statement)");
+                free(variant); free(name);
+                return parser_recover(p);
+            }
+            int arg_count = 0;
+            ASTNode** args = NULL;
+            if (!parse_paren_args(p, &args, &arg_count)) {
+                free(variant); free(name);
+                return parser_recover(p);
+            }
+            char* compound = malloc(strlen(name) + 2 + strlen(variant) + 1);
+            if (!compound) {
+                parser_error(p, "out of memory while building qualified variant call");
+                free(variant); free(name);
+                return parser_recover(p);
+            }
+            sprintf(compound, "%s::%s", name, variant);
+            optional_semicolon(p);
+            ASTNode* node = (ASTNode*)ast_new_call_stmt(compound, args, arg_count, line, column);
+            free(compound); free(variant); free(name);
+            return node;
+        }
 
         /* Sprint 4: `module.member(args);` — module member call statement.
          * We handle this BEFORE the regular call-statement branch because
@@ -2299,7 +2445,11 @@ ASTNode* parse_statement(Parser* p) {
             int v_line = p->current.line;
             int v_column = p->current.column;
             eat_p(p, TOKEN_IDENTIFIER);
-            /* Sprint 3: optional `: type` annotation in for-let. */
+            /* Sprint 3: optional `: type` annotation in for-let.
+             * 2.7.0 (FU1): use the shared recursive annotation parser so
+             * generic/enum types work here too — `for (let o: Option<int>
+             * = None; ...)` previously failed with a syntax error because
+             * only a single identifier was consumed. */
             char* v_type_annotation = NULL;
             if (p->current.type == TOKEN_COLON) {
                 eat_p(p, TOKEN_COLON);
@@ -2308,8 +2458,7 @@ ASTNode* parse_statement(Parser* p) {
                     free(v_name);
                     return parser_recover(p);
                 }
-                v_type_annotation = strdup(p->current.value);
-                eat_p(p, TOKEN_IDENTIFIER);
+                v_type_annotation = parse_type_str(p);
             }
             eat_p(p, TOKEN_EQUALS);
             /* Sprint 1 fix: same "missing initializer" check as the standalone

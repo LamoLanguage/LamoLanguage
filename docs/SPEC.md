@@ -111,7 +111,7 @@ meaningful inside an `impl` block; `std` is a path prefix in `import std.X`
 && || !               logical
 ++ --                 increment / decrement
 (  )  [  ]  {  }       grouping / array / block
-,  ;  :  ->  .         punctuation
+,  ;  :  ::  ->  .     punctuation (`::` = variant qualification, §3.5)
 ```
 
 `;` is optional at the end of a statement (see §3.1).
@@ -351,11 +351,8 @@ enum Color {
 ```
 
 - Each variant becomes a top-level `int` constant (`Red = 0`, `Green = 1`, …).
-- Variants are accessible by bare name (no `Color::Red` qualifier).
-- Variant names must be unique within their enum. Across enums, variant name
-  collisions are allowed — the later declaration shadows the earlier (with a
-  warning). This is a known wart; future work will fix this by requiring
-  qualification.
+- Variants are accessible by bare name, or with the `Enum::Variant`
+  qualifier (2.7.0) — see below.
 
 **Tagged-union enums (2.6.0):** variants may carry payloads:
 
@@ -409,11 +406,58 @@ Semantics:
   on the variant, not on truthiness.
 - **Printing:** tagged values render `Some(42)`, `None`, `Err("oops")` —
   including inside arrays and structs.
-- **No enum type annotations yet.** `let o: Option<int> = ...` is not
-  accepted in 2.6.0 (the annotation resolver only knows builtins,
-  structs, and type parameters). Inference covers construction, match,
-  assignment, and passing tagged values through unannotated parameters.
-  Generic-enum annotations are future work (§13).
+
+**Variant qualification (2.7.0):**
+
+- `Enum::Variant` names a variant exactly — `Option::Some(5)`,
+  `Option::None` (as a value), `Shape::Circle(r) => ...` (as a pattern).
+- Qualified lookups bypass bare-name resolution entirely; they are the
+  disambiguation tool for cross-enum collisions.
+- A qualified PAYLOAD variant still cannot be used as a value without a
+  call (`Option::Some` alone is an error, with a hint pointing at
+  `Option::Some(...)`).
+- In expressions, qualified constructor calls reuse the regular call
+  forms; qualified unit variants are first-class values.
+
+**Variant-name collisions (2.7.0):** the §3.5 "later wins" wart is now
+the DEFINED behavior and is legal:
+
+- Two enums may declare the same variant name. The LATER enum's variant
+  wins for bare references, and the compiler emits a one-time warning:
+  `variant 'Item' of enum 'Second' shadows variant 'Item' of enum 'First'; bare 'Item' now refers to the later declaration (disambiguate with Second::Item or First::Item)`.
+- Either variant remains reachable through `Enum::Variant` qualification.
+- A bare variant that resolves to a payload variant still cannot be used
+  as a value (the §3.5 payload rule applies to whatever the bare name
+  resolves to).
+
+**Enum type annotations (2.7.0):** `let`, parameters, returns, for-lets,
+struct fields, and enum payloads all accept enum-typed annotations:
+
+```
+let a: Option<int> = Some(42);
+let b: Shape = Circle(3);
+
+fn unwrap_or(o: Option<int>, d: int) -> Option<int> { ... }
+```
+
+- The annotation resolver accepts any declared enum as an annotation
+  head; enum payloads and struct fields may reference enums anywhere a
+  type is allowed (including nests like `array<Option<int>>`).
+- A generic enum requires exactly `type_param_count` type arguments:
+  bare `Option` (where `enum Option<T>`) and `Option<int, string>` are
+  compile errors, and every argument must itself resolve (builtins,
+  structs, enums, in-scope type parameters). A non-generic enum rejects
+  type arguments.
+- The annotation's enum must match the initializer's enum: `let o:
+  Option<int> = Err("x")` errors with `type annotation 'Option<int>'
+  does not match enum 'Result' value`.
+- Constructor calls carry their concrete full type (`Some(42)` has type
+  `Option<int>`, inferred by binding the enum's type parameters against
+  the payload arguments), so annotated parameters/returns participate in
+  the §7.7 call-site binding machinery: `fn f(o: Option<int>)` called
+  with `f(Some(5))` binds and checks like any generic signature.
+- The runtime representation is unchanged (erasure) — annotations are
+  purely compile-time.
 
 ### 3.6 `impl` blocks
 
@@ -503,7 +547,8 @@ match color {
 ```
 
 - Patterns are enum variant names, variant names with payload bindings
-  (2.6.0: `Some(x) => ...`), or `_` (wildcard).
+  (2.6.0: `Some(x) => ...`), qualified variants (2.7.0:
+  `Enum::Variant(x) => ...`), or `_` (wildcard).
 - The first matching arm wins.
 - Arm bodies can be a single expression or a `{ }` block.
 - **Payload bindings (2.6.0):** when the matched enum is a tagged union
@@ -514,10 +559,30 @@ match color {
   WITHOUT bindings is an error, as is a binding list on a unit variant
   or on the `_` wildcard. On the generated-code side the scrutinee is
   evaluated exactly once.
-- The compiler emits a warning when the scrutinee has a known enum type and
-  not all variants are covered (and no `_` arm is present).
-- Today, untagged `match` only supports variant equality. Literal patterns,
-  further destructuring (nested payloads), and guards are future work (§13).
+- **Nested payload patterns (2.7.0):** a payload slot may itself hold a
+  constructor pattern — `Some(Pair(a, b))` destructures a payload that
+  is another tagged value, to any depth (`W(Some(Shape::Square(s))))`.
+  Inside a payload list, a bare identifier is a BINDING; a unit-variant
+  payload must be matched with the qualified form (`Some(Option::None)`)
+  or with `_`, because a bare `None` in a nested position would be a
+  binding named `None`, not the variant. Nested constructor arities are
+  validated like top-level ones, and a failed nested tag check falls
+  through to the NEXT arm (nested patterns cannot be expressed with an
+  else-if chain; the generated code uses a per-match done-flag).
+- **`when` guards (2.7.0):** an arm may be gated with an expression —
+  `Some(x) when x > 0 => ...`. `when` is contextual (a variant may be
+  named `when`; only `when <expr> =>` starts a guard). Guards run after
+  the pattern matches, can read the arm's bindings, and must be
+  truthy-compatible (§7.5 — a `void` guard is a compile error). An arm
+  whose guard fails falls through to the next arm.
+- **Exhaustiveness (2.7.0):** with no `_` arm, every variant must be
+  covered by at least one UNGUARDED arm — a guarded arm can fail its
+  condition, so it does not count as covering its variant (the
+  non-exhaustive diagnostic keeps its historical `warning:` wording but
+  remains fatal, as in 2.6.0).
+- Today, untagged `match` only supports variant equality (now
+  collision-safe: arms compare the variant's INDEX, not the shadowable
+  bare-variant global). Literal patterns remain future work (§13).
 
 ### 4.7 Assignment
 
@@ -1306,14 +1371,12 @@ this spec. When they ship, this spec will be updated.
 
 - **First-class functions / closures** — `let f = fn(x) { ... }`.
 - **Iterator protocol** — `for x in arr { ... }`.
-- **Tagged unions / sum types** — `enum` carrying data, with destructuring in
-  `match` (the current `Option`/`Result` stdlib APIs are function-shaped
-  precisely because this prerequisite is still open).
-- **Pattern matching** beyond variant equality — literals, guards,
-  destructuring.
+- **Pattern matching beyond variants** — literal patterns, OR-patterns,
+  match as an expression (the current `match` is statement-only). Nested
+  payload destructuring, `when` guards, and `Enum::Variant` qualification
+  **shipped in 2.7.0** (§3.5, §4.6).
 - **Exception / error-handling mechanism** — likely `Result<T, E>` based, not
   throw/catch.
-- **`pub` visibility** — explicit module exports.
 - **Forward declarations** for mutual recursion.
 - **String interpolation** — `"hello \(name)"` or `` `hello ${name}` ``.
 - **`for-in` loops** — `for x in arr { ... }`.
@@ -1350,3 +1413,14 @@ this spec. When they ship, this spec will be updated.
   export markers with the §10.6 two-step rollout, folder-based modules
   (§10.3), duplicate-import decision table (§10.5), and module loading in
   `eval`/`repl` (§10.7).
+- **v1.4** (compiler 2.7.0) — the 2.6.0 Open Follow-Ups ledger closed:
+  enum type annotations (§3.5 — `let`, params, returns, for-lets, fields,
+  payloads; arg-count + leaf validation; ctor full-type inference feeding
+  §7.7 binding); nested payload patterns and `when` guards in `match`
+  (§4.6, with Rust-style exhaustiveness treatment of guarded arms);
+  `Enum::Variant` qualification (§3.5) with cross-enum "later wins"
+  collisions defined as legal plus a shadowing warning; `pub` step 2
+  enforced (§10.6 — non-`pub` via alias is a compile error, REPL
+  included); `run_tests.ps1` gained the eval-cases section (§10.7 parity
+  with `tests/run_tests.sh`). Statement-position constructor calls fixed
+  to emit real tagged values.

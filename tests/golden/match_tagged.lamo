@@ -1,0 +1,14 @@
+// 2.7.0 golden: tagged-union match with nested payload patterns and a
+// `when` guard — pins the flag-based fall-through desugar.
+enum Option<T> { Some(T), None }
+enum Shape { Circle(int), Square(int) }
+
+fn main() {
+    let s = Some(Shape::Circle(9));
+    match s {
+        Some(Shape::Circle(r)) when r > 5 => print("big"),
+        Some(Shape::Square(w)) => print("square"),
+        Some(_) => print("some"),
+        None => print("none"),
+    }
+}

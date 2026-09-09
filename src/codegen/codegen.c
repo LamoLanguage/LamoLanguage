@@ -179,6 +179,34 @@ static const char* user_name1(const char* name) {
     return buffer;
 }
 
+/* 2.7.0 (FU4): qualified constructor calls reuse AST_CALL_EXPR /
+ * AST_CALL_STMT with the compound name "Enum::Variant"; the runtime
+ * variant literal is only the variant part. */
+static const char* lamo_variant_short_name(const char* name) {
+    const char* sep = strstr(name, "::");
+    return sep ? sep + 2 : name;
+}
+
+/* 2.7.0 (FU4): is the named enum a tagged union (payload variants)?
+ * Used by the AST_VARIANT_REF emitter to pick lamo_make_enum vs
+ * lamo_make_int. Mirrors semantic.c's enum_decl_is_tagged. */
+static int lamo_codegen_enum_is_tagged(const char* enum_name) {
+    for (ASTNode* cur = g_program_decls; cur; cur = cur->next) {
+        if (cur->type == AST_ENUM_DECL) {
+            ASTEnumDecl* cand = (ASTEnumDecl*)cur;
+            if (cand->name && strcmp(cand->name, enum_name) == 0) {
+                if (cand->variant_payload_counts) {
+                    for (int v = 0; v < cand->variant_count; v++) {
+                        if (cand->variant_payload_counts[v] > 0) return 1;
+                    }
+                }
+                return 0;
+            }
+        }
+    }
+    return 0;
+}
+
 static void generate_statement_code(ASTNode* node, FILE* out);
 static void generate_expression_code(ASTNode* node, FILE* out);
 static void generate_call_arguments(ASTNode** args, int arg_count, FILE* out);
@@ -1092,12 +1120,36 @@ void generate_c_code(ASTNode* node, FILE* out) {
         current = current->next;
     }
     /* Phase 2: emit enum variant globals. */
+    char** variant_global_names = NULL;
+    int variant_global_count = 0;
+    int variant_global_cap = 0;
     current = ((ASTProgram*)node)->declarations;
     while (current) {
         if (current->type == AST_ENUM_DECL) {
             ASTEnumDecl* ed = (ASTEnumDecl*)current;
             for (int i = 0; i < ed->variant_count; i++) {
-                fprintf(out, "static LamoValue %s;\n", user_name1(ed->variants[i]));
+                /* 2.7.0 (FU4): cross-enum variant-name collisions are
+                 * legal ("later wins"), so two enums may declare the
+                 * same variant name. Declare each global ONCE — the
+                 * initialization loop below still writes per enum in
+                 * declaration order, so the LAST enum's value wins,
+                 * matching the semantic pass's symbol retargeting. */
+                const char* vn = user_name1(ed->variants[i]);
+                int seen = 0;
+                for (int d = 0; d < variant_global_count; d++) {
+                    if (strcmp(variant_global_names[d], ed->variants[i]) == 0) { seen = 1; break; }
+                }
+                if (seen) continue;
+                if (variant_global_count == variant_global_cap) {
+                    int nc = variant_global_cap > 0 ? variant_global_cap * 2 : 32;
+                    char** nn = realloc(variant_global_names, sizeof(char*) * (size_t)nc);
+                    if (!nn) break;
+                    variant_global_names = nn;
+                    variant_global_cap = nc;
+                }
+                variant_global_names[variant_global_count] = strdup(ed->variants[i]);
+                variant_global_count++;
+                fprintf(out, "static LamoValue %s;\n", vn);
             }
         }
         current = current->next;
@@ -1675,6 +1727,27 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
         }
         case AST_CALL_STMT: {
             ASTCallStmt* call_stmt = (ASTCallStmt*)node;
+            /* 2.7.0 (FU4): enum-variant constructor statement —
+             * `Some(5);` / `Enum::Variant(5);`. The semantic pass now
+             * annotates statement-position calls, so emit the same
+             * statement-expression the expression path uses (previously
+             * this emitted a bogus call to the variant global and broke
+             * the GCC backend). */
+            if (call_stmt->base.sema_enum_name) {
+                int payload_count = call_stmt->arg_count;
+                fprintf(out, "({ LamoArray* _lamo_enum_pl = lamo_enum_payloads_alloc(%d); ",
+                        payload_count > 0 ? payload_count : 0);
+                for (int pi = 0; pi < payload_count; pi++) {
+                    fprintf(out, "_lamo_enum_pl->items[%d] = ", pi);
+                    generate_expression_code(call_stmt->args[pi], out);
+                    fprintf(out, "; ");
+                }
+                fprintf(out, "lamo_make_enum(%d, \"%s\", _lamo_enum_pl); })",
+                        call_stmt->base.sema_variant_index,
+                        lamo_variant_short_name(call_stmt->name));
+                fprintf(out, ";\n");
+                break;
+            }
             if (is_lang_builtin(call_stmt->name)) {
                 generate_lang_builtin_call_expr(call_stmt->name, call_stmt->args, call_stmt->arg_count, out);
             } else if (is_gui_builtin(call_stmt->name)) {
@@ -1720,19 +1793,20 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
              * Nothing to do here. */
             break;
         case AST_MATCH_STMT: {
-            /* Phase 2: desugar match to an if/else chain.
-             *   match s { Red => body1; Green => body2; _ => body3; }
-             * becomes:
-             *   if (lamo_is_truthy(lamo_equal(s, Red))) body1
-             *   else if (lamo_is_truthy(lamo_equal(s, Green))) body2
-             *   else body3
-             * Wildcard arms become the trailing `else`.
+            /* Phase 2: match desugars to a chain of guarded blocks.
              *
-             * 2.6.0: matches whose enum is a TAGGED union (the semantic
-             * pass stored its name in sema_enum_name) use a tag-compare
-             * desugar with a scrutinee temp so the value is evaluated
-             * once; payload bindings are pulled out of the temp with
-             * lamo_enum_payload (SPEC §4.6). */
+             * 2.6.0: tagged unions (sema_enum_name set) use tag compares
+             * against a single-evaluation scrutinee temp.
+             *
+             * 2.7.0 (FU2/FU4): arms are (pattern tree, guard, body)
+             * triples. Nested payload patterns (`Some(Pair(a, b))`) need
+             * a MID-ARM failure to fall through to LATER arms, which an
+             * else-if chain cannot express — so each arm is emitted as
+             * an `if (!_lamo_match_done) { ... }` block with a shared
+             * done-flag: nested tag checks just skip to the next arm.
+             * `when` guards gate the body with lamo_is_truthy. Binding
+             * leaves are pulled positionally per level with
+             * lamo_enum_payload; wildcards pull nothing. */
             ASTMatchStmt* ms = (ASTMatchStmt*)node;
             if (ms->sema_enum_name) {
                 ASTEnumDecl* ed = NULL;
@@ -1750,53 +1824,123 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
                     fprintf(out, "LamoValue _lamo_match_scrut = ");
                     generate_expression_code(ms->scrutinee, out);
                     fprintf(out, ";\n");
-                    int has_emitted = 0;
+                    print_indent(out);
+                    fprintf(out, "int _lamo_match_done = 0;\n");
+                    /* Unique temp counter for nested payload pulls. */
+                    int pat_temp_id = 0;
                     for (int i = 0; i < ms->arm_count; i++) {
-                        if (ms->pattern_is_wildcard[i]) {
+                        LamoPattern* pat = ms->patterns[i];
+                        ASTNode* guard = ms->guards[i];
+                        if (!pat) continue;
+                        print_indent(out);
+                        fprintf(out, "if (!_lamo_match_done) {\n");
+                        indent_level++;
+                        if (pat->kind == LAMO_PATTERN_WILDCARD) {
+                            /* Catch-all arm; a guard on `_` still gates it. */
                             print_indent(out);
-                            fprintf(out, "else ");
-                            if (ms->bodies[i]) {
-                                generate_statement_code(ms->bodies[i], out);
-                            } else {
-                                fprintf(out, "{ }\n");
-                            }
-                            has_emitted = 1;
-                        } else {
-                            /* Resolve this arm's variant index. */
-                            int vidx = -1;
-                            for (int v = 0; v < ed->variant_count; v++) {
-                                if (ed->variants[v] && strcmp(ed->variants[v], ms->patterns[i]) == 0) { vidx = v; break; }
-                            }
-                            int bcount = ms->pattern_bindings ? ms->pattern_binding_counts[i] : 0;
-                            print_indent(out);
-                            if (has_emitted) fprintf(out, "else ");
-                            fprintf(out, "if (lamo_enum_tag_is(_lamo_match_scrut, %d)) ", vidx);
-                            if (bcount > 0) {
-                                /* Bind payloads in a C block scope. */
-                                fprintf(out, "{\n");
+                            if (guard) {
+                                fprintf(out, "if (lamo_is_truthy(");
+                                generate_expression_code(guard, out);
+                                fprintf(out, ")) {\n");
                                 indent_level++;
-                                for (int b = 0; b < bcount; b++) {
-                                    print_indent(out);
-                                    fprintf(out, "LamoValue %s = lamo_enum_payload(_lamo_match_scrut, %d);\n",
-                                            user_name1(ms->pattern_bindings[i][b]), b);
-                                    /* Suppress -Wunused-variable when the
-                                     * body doesn't read every binding. */
-                                    print_indent(out);
-                                    fprintf(out, "(void)%s;\n", user_name1(ms->pattern_bindings[i][b]));
-                                }
-                                if (ms->bodies[i]) {
-                                    generate_statement_code(ms->bodies[i], out);
-                                }
+                                if (ms->bodies[i]) generate_statement_code(ms->bodies[i], out);
+                                print_indent(out);
+                                fprintf(out, "_lamo_match_done = 1;\n");
                                 indent_level--;
                                 print_indent(out);
                                 fprintf(out, "}\n");
-                            } else if (ms->bodies[i]) {
-                                generate_statement_code(ms->bodies[i], out);
                             } else {
-                                fprintf(out, "{ }\n");
+                                fprintf(out, "_lamo_match_done = 1;\n");
+                                if (ms->bodies[i]) generate_statement_code(ms->bodies[i], out);
                             }
-                            has_emitted = 1;
+                        } else {
+                            /* Constructor arm. Recursive emission over the
+                             * pattern tree: value_expr owns the current
+                             * C expression (caller frees). */
+                            char cur_expr[64];
+                            snprintf(cur_expr, sizeof(cur_expr), "_lamo_match_scrut");
+                            /* Depth-first walk emitting tag checks and
+                             * payload binding lines. We emit the checks
+                             * as nested `if (...) {` blocks and close
+                             * them after the body. */
+                            print_indent(out);
+                            fprintf(out, "if (lamo_enum_tag_is(%s, %d)) {\n",
+                                    cur_expr, pat->sema_variant_index);
+                            indent_level++;
+                            /* Emit nested extraction recursively. */
+                            /* Stack of open `if` blocks to close later. */
+                            int open_blocks = 1;  /* the tag-if above */
+                            /* Worklist via recursion would re-emit; use an
+                             * explicit recursion helper below. */
+                            /* ---- helper-emitted payload chain ---- */
+                            /* We recurse manually with a small stack of
+                             * (pattern, expr-name, payload-index). */
+                            LamoPattern* stack_pat[64];
+                            char stack_expr[64][64];
+                            int stack_idx[64];
+                            int sp = 0;
+                            /* Push children of the root ctor. */
+                            for (int c = pat->child_count - 1; c >= 0; c--) {
+                                stack_pat[sp] = pat->children[c];
+                                snprintf(stack_expr[sp], sizeof(stack_expr[sp]), "%s", cur_expr);
+                                stack_idx[sp] = c;
+                                sp++;
+                            }
+                            while (sp > 0) {
+                                sp--;
+                                LamoPattern* cp = stack_pat[sp];
+                                int cidx = stack_idx[sp];
+                                const char* pexpr = stack_expr[sp];
+                                if (!cp) continue;
+                                if (cp->kind == LAMO_PATTERN_BINDING) {
+                                    print_indent(out);
+                                    fprintf(out, "LamoValue %s = lamo_enum_payload(%s, %d);\n",
+                                            user_name1(cp->name), pexpr, cidx);
+                                    print_indent(out);
+                                    fprintf(out, "(void)%s;\n", user_name1(cp->name));
+                                } else if (cp->kind == LAMO_PATTERN_CTOR) {
+                                    char tmp[48];
+                                    snprintf(tmp, sizeof(tmp), "_lamo_pat_%d", pat_temp_id++);
+                                    print_indent(out);
+                                    fprintf(out, "LamoValue %s = lamo_enum_payload(%s, %d);\n",
+                                            tmp, pexpr, cidx);
+                                    print_indent(out);
+                                    fprintf(out, "if (lamo_enum_tag_is(%s, %d)) {\n",
+                                            tmp, cp->sema_variant_index);
+                                    indent_level++;
+                                    open_blocks++;
+                                    for (int c = cp->child_count - 1; c >= 0; c--) {
+                                        stack_pat[sp] = cp->children[c];
+                                        snprintf(stack_expr[sp], sizeof(stack_expr[sp]), "%s", tmp);
+                                        stack_idx[sp] = c;
+                                        sp++;
+                                    }
+                                }
+                                /* wildcards bind nothing and check nothing */
+                            }
+                            /* Guard + body inside the innermost block. */
+                            print_indent(out);
+                            if (guard) {
+                                fprintf(out, "if (lamo_is_truthy(");
+                                generate_expression_code(guard, out);
+                                fprintf(out, ")) {\n");
+                                indent_level++;
+                                open_blocks++;
+                            }
+                            if (ms->bodies[i]) generate_statement_code(ms->bodies[i], out);
+                            print_indent(out);
+                            fprintf(out, "_lamo_match_done = 1;\n");
+                            /* Close all open blocks for this arm. */
+                            while (open_blocks > 0) {
+                                indent_level--;
+                                print_indent(out);
+                                fprintf(out, "}\n");
+                                open_blocks--;
+                            }
                         }
+                        indent_level--;
+                        print_indent(out);
+                        fprintf(out, "}\n");
                     }
                     indent_level--;
                     print_indent(out);
@@ -1807,24 +1951,55 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
                  * the legacy desugar below. */
             }
             {
+            /* Legacy untagged-enum path (plain int constants). Guards
+             * chain with && so a failed guard falls through to the next
+             * arm (the else-if chain gives exactly that). */
             int has_emitted = 0;
             for (int i = 0; i < ms->arm_count; i++) {
-                if (ms->pattern_is_wildcard[i]) {
-                    /* Trailing else. */
+                LamoPattern* pat = ms->patterns[i];
+                if (!pat) continue;
+                if (pat->kind == LAMO_PATTERN_WILDCARD) {
+                    /* Trailing else (guard on `_` folds into the else-if). */
                     print_indent(out);
-                    fprintf(out, "else ");
+                    if (ms->guards[i]) {
+                        if (has_emitted) fprintf(out, "else ");
+                        fprintf(out, "if (lamo_is_truthy(");
+                        generate_expression_code(ms->guards[i], out);
+                        fprintf(out, ")) ");
+                    } else {
+                        fprintf(out, "else ");
+                    }
                     if (ms->bodies[i]) {
                         generate_statement_code(ms->bodies[i], out);
                     } else {
                         fprintf(out, "{ }\n");
                     }
+                    has_emitted = 1;
                 } else {
-                    /* `if (scrut == pattern) body` (or `else if`). */
+                    /* `if (scrut == pattern [&& guard]) body` (or `else if`).
+                     * 2.7.0 (FU4): compare against the variant's INDEX
+                     * (patterns carry sema_variant_index) instead of the
+                     * bare-variant global — with legal cross-enum name
+                     * collisions the global may hold a DIFFERENT enum's
+                     * variant value, and qualified patterns
+                     * (`First::Item`) must compare against First's index
+                     * specifically. Falls back to the global for
+                     * unstamped patterns (legacy defensive path). */
                     print_indent(out);
                     if (has_emitted) fprintf(out, "else ");
                     fprintf(out, "if (lamo_is_truthy(lamo_equal(");
                     generate_expression_code(ms->scrutinee, out);
-                    fprintf(out, ", %s))) ", user_name1(ms->patterns[i]));
+                    if (pat->sema_variant_index >= 0) {
+                        fprintf(out, ", lamo_make_int(%d))))", pat->sema_variant_index);
+                    } else {
+                        fprintf(out, ", %s)))", user_name1(lamo_variant_short_name(pat->name)));
+                    }
+                    if (ms->guards[i]) {
+                        fprintf(out, " && lamo_is_truthy(");
+                        generate_expression_code(ms->guards[i], out);
+                        fprintf(out, ")");
+                    }
+                    fprintf(out, " ");
                     if (ms->bodies[i]) {
                         generate_statement_code(ms->bodies[i], out);
                     } else {
@@ -2102,6 +2277,21 @@ static void generate_expression_code(ASTNode* node, FILE* out) {
             }
             break;
         }
+        case AST_VARIANT_REF: {
+            /* 2.7.0 (FU4): qualified unit-variant value — `Enum::Variant`.
+             * Emit the value directly so it does not depend on the
+             * (shadowable) bare-variant globals: tagged enums get
+             * lamo_make_enum with a NULL payload array, legacy untagged
+             * enums keep the plain int constant. */
+            ASTVariantRef* vr = (ASTVariantRef*)node;
+            if (lamo_codegen_enum_is_tagged(vr->enum_name)) {
+                fprintf(out, "lamo_make_enum(%d, \"%s\", (LamoArray*)0)",
+                        node->sema_variant_index, vr->variant_name);
+            } else {
+                fprintf(out, "lamo_make_int(%dLL)", node->sema_variant_index);
+            }
+            break;
+        }
         case AST_CALL_EXPR: {
             ASTCallExpr* call_expr = (ASTCallExpr*)node;
             /* 2.6.0: enum variant constructor — `Some(42)` (SPEC §3.5).
@@ -2120,7 +2310,9 @@ static void generate_expression_code(ASTNode* node, FILE* out) {
                     fprintf(out, "; ");
                 }
                 fprintf(out, "lamo_make_enum(%d, \"%s\", _lamo_enum_pl); })",
-                        call_expr->base.sema_variant_index, call_expr->name);
+                        call_expr->base.sema_variant_index,
+                        /* 2.7.0 (FU4): qualified names print only the variant. */
+                        lamo_variant_short_name(call_expr->name));
             } else if (is_lang_builtin(call_expr->name)) {
                 generate_lang_builtin_call_expr(call_expr->name, call_expr->args, call_expr->arg_count, out);
             } else if (is_gui_builtin(call_expr->name)) {

@@ -169,15 +169,25 @@ formalized in `docs/ARCHITECTURE.md`.
   builtin forms.
 - Enums & match: `enum Name { Variant, ... }` (variants are global int
   constants); `match scrutinee { Pattern => body, _ => default }` with
-  exhaustiveness warnings. 2.6.0: TAGGED-UNION enums — variants may carry
+  exhaustiveness checks. 2.6.0: TAGGED-UNION enums — variants may carry
   payloads (`enum Option<T> { Some(T), None }`), constructed by call syntax
   and destructured in match arms (`Some(x) => ...`); tagged values are a
   distinct runtime kind (`LAMO_VALUE_ENUM`), always truthy, compared
   tag-then-payload-wise, printed as `Some(42)`. Untagged enums keep the
-  legacy int representation.
+  legacy int representation. 2.7.0: NESTED payload patterns
+  (`Some(Pair(a, b))`), `when` guards (`Some(x) when x > 0 => ...`,
+  guarded arms don't count toward exhaustiveness), ENUM TYPE ANNOTATIONS
+  (`let o: Option<int> = ...`, params/returns/for-lets/fields — arg-count
+  and leaf validated; ctor calls infer their concrete full type feeding
+  call-site binding), and `Enum::Variant` QUALIFICATION with legal
+  cross-enum "later wins" collisions + shadow warning (variant globals
+  are deduped in generated C; untagged match arms compare the variant
+  index).
 - Export markers (2.6.0): contextual `pub` on top-level declarations
-  (`pub fn ...`). Non-`pub` members still export but warn once when reached
-  through a module alias (SPEC §10.6 two-step rollout, step 1).
+  (`pub fn ...`). 2.7.0 (§10.6 step 2): non-`pub` members accessed through
+  a module alias are a compile ERROR — all shipped `std/` modules mark
+  their members `pub`; the REPL enforces the same boundary at lookup
+  time.
 - Generics (2.5.0): generic structs `struct Pair<A, B>`, generic functions
   `fn id<T>(x: T) -> T` with call-site inference, `impl<T> Stack<T>`, typed
   arrays `array<T>` (bare `array` is a deprecated alias for `array<any>`),

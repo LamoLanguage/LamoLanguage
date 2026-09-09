@@ -12,10 +12,10 @@ impl Point {
     }
 }
 
-fn make_point(x: int, y: int) -> Point {
+pub fn make_point(x: int, y: int) -> Point {
     return Point { x: x, y: y }
 }
 
-fn origin() -> Point {
+pub fn origin() -> Point {
     return Point { x: 0, y: 0 }
 }

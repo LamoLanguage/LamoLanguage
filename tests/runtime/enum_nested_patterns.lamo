@@ -1,0 +1,54 @@
+// 2.7.0 (FU2): nested payload destructuring + `when` guards.
+enum Option<T> { Some(T), None }
+enum Shape { Circle(int), Square(int) }
+enum Wrap { W(Option<Shape>), Empty }
+
+fn main() {
+    // Nested: payload itself is a tagged enum.
+    let a = Some(Shape::Circle(9));
+    match a {
+        Some(Shape::Circle(r)) when r > 5 => print("big " + r),
+        Some(Shape::Circle(r)) => print("small " + r),
+        Some(Shape::Square(w)) => print("square " + w),
+        None => print("none"),
+    }
+
+    // Guard failure falls through to the next arm.
+    match Some(Shape::Circle(2)) {
+        Some(Shape::Circle(r)) when r > 5 => print("big " + r),
+        Some(Shape::Circle(r)) => print("small " + r),
+        _ => print("fallback"),
+    }
+
+    // Wildcard leaf inside a nested pattern.
+    match Some(Shape::Square(4)) {
+        Some(Shape::Square(_)) => print("square!"),
+        _ => print("not square"),
+    }
+
+    // Deeper nesting: enum inside enum payload.
+    let w = W(Some(Shape::Square(7)));
+    match w {
+        W(Some(Shape::Square(s))) => print("inner square " + s),
+        W(Some(_)) => print("inner other"),
+        W(None) => print("inner none"),
+        Empty => print("empty"),
+    }
+
+    // Nested binding + top binding in one arm.
+    match W(Some(Shape::Circle(1))) {
+        W(inner) => match inner {
+            Some(Shape::Circle(r)) => print("bound " + r),
+            _ => print("bound other"),
+        },
+        Empty => print("none"),
+    }
+    // Unit variant inside nested position (qualified form is required
+    // for unit variants — a bare nested identifier is a binding).
+    let n = Some(None);
+    match n {
+        Some(Option::None) => print("inner none"),
+        Some(_) => print("inner some"),
+        None => print("outer none"),
+    }
+}

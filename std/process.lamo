@@ -12,30 +12,30 @@
 //   print(output)
 
 // currentPid() — return the OS process ID of the current process.
-fn currentPid() {
+pub fn currentPid() {
     return __lamo_std_process_pid()
 }
 
 // run(cmd) — execute a shell command synchronously. Returns the exit
 // code. Use this for side-effectful commands where output capture
 // is not needed.
-fn run(cmd) {
+pub fn run(cmd) {
     return __lamo_std_process_run(cmd)
 }
 
 // exec(cmd) — execute a shell command synchronously and return its
 // stdout as a string. Stderr is not captured (it goes to the parent
 // process's stderr). Returns "" if the command cannot be started.
-fn exec(cmd) {
+pub fn exec(cmd) {
     return __lamo_std_process_exec(cmd)
 }
 
 // exit(code) — terminate the program with the given exit code.
-fn exit(code) {
+pub fn exit(code) {
     return __lamo_std_process_exit(code)
 }
 
 // pid() — short alias for currentPid().
-fn pid() {
+pub fn pid() {
     return __lamo_std_process_pid()
 }

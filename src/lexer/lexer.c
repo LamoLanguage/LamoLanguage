@@ -305,7 +305,12 @@ Token lexer_next_token(Lexer* l) {
         case ']': t.type = TOKEN_RBRACKET; t.value = strdup("]"); break;
         case ',': t.type = TOKEN_COMMA; t.value = strdup(","); break;
         case ';': t.type = TOKEN_SEMICOLON; t.value = strdup(";"); break;
-        case ':': t.type = TOKEN_COLON; t.value = strdup(":"); break;
+        case ':':
+            /* 2.7.0 (FU4): `::` variant qualification lexes as ONE token
+             * (mirrors the `->` / `=>` two-char lookahead above). */
+            if (peek(l) == ':') { advance(l); t.type = TOKEN_COLON_COLON; t.value = strdup("::"); }
+            else { t.type = TOKEN_COLON; t.value = strdup(":"); }
+            break;
         case '.': t.type = TOKEN_DOT; t.value = strdup("."); break;
         case '+':
             if (peek(l) == '=') { advance(l); t.type = TOKEN_PLUS_EQ; t.value = strdup("+="); }
@@ -408,6 +413,7 @@ const char* token_type_name(LamoTokenType type) {
         case TOKEN_COMMA: return ",";
         case TOKEN_SEMICOLON: return ";";
         case TOKEN_COLON: return ":";
+        case TOKEN_COLON_COLON: return "::";
         case TOKEN_DOT: return ".";
         case TOKEN_EQ_EQ: return "==";
         case TOKEN_BANG_EQ: return "!=";

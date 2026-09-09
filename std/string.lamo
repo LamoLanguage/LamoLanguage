@@ -13,78 +13,78 @@
 //   text.trim("  x  ")          // "x"
 //   text.split("a,b,c", ",")    // ["a", "b", "c"]
 
-fn length(s) {
+pub fn length(s) {
     return __lamo_std_str_length(s)
 }
 
-fn upper(s) {
+pub fn upper(s) {
     return __lamo_std_str_upper(s)
 }
 
-fn lower(s) {
+pub fn lower(s) {
     return __lamo_std_str_lower(s)
 }
 
-fn trim(s) {
+pub fn trim(s) {
     return __lamo_std_str_trim(s)
 }
 
-fn startsWith(s, prefix) {
+pub fn startsWith(s, prefix) {
     return __lamo_std_str_starts_with(s, prefix)
 }
 
-fn endsWith(s, suffix) {
+pub fn endsWith(s, suffix) {
     return __lamo_std_str_ends_with(s, suffix)
 }
 
-fn contains(s, needle) {
+pub fn contains(s, needle) {
     return __lamo_std_str_contains(s, needle)
 }
 
-fn indexOf(s, needle) {
+pub fn indexOf(s, needle) {
     return __lamo_std_str_index_of(s, needle)
 }
 
-fn substring(s, start, end) {
+pub fn substring(s, start, end) {
     return __lamo_std_str_substring(s, start, end)
 }
 
-fn replace(s, from, to) {
+pub fn replace(s, from, to) {
     return __lamo_std_str_replace(s, from, to)
 }
 
-fn split(s, sep) {
+pub fn split(s, sep) {
     return __lamo_std_str_split(s, sep)
 }
 
-fn charAt(s, idx) {
+pub fn charAt(s, idx) {
     return __lamo_std_str_char_at(s, idx)
 }
 
-fn repeat(s, n) {
+pub fn repeat(s, n) {
     return __lamo_std_str_repeat(s, n)
 }
 
 // slice(s, start) — substring from `start` to end of string.
-fn slice(s, start) {
+pub fn slice(s, start) {
     return __lamo_std_str_substring(s, start, -1)
 }
 
 // equals(a, b) — string equality (returns 1/0). Lamo's `==` already
 // compares strings by value, but this is provided for API symmetry.
-fn equals(a, b) {
+pub fn equals(a, b) {
     if (a == b) { return 1 }
     return 0
 }
 
 // is_empty(s) — returns 1 if s is empty, 0 otherwise.
-fn isEmpty(s) {
+pub fn isEmpty(s) {
     if (length(s) == 0) { return 1 }
     return 0
 }
 
 // count(s, needle) — count non-overlapping occurrences of needle in s.
-fn count(s, needle) {
+pub fn count(s, needle) {
     let total = 0
     let i = indexOf(s, needle)
     let start = 0

@@ -2,14 +2,14 @@
 // Defines functions that the main test file imports with `as math;`
 // and calls via the namespaced syntax `math.square(x)` etc.
 
-fn square(n) {
+pub fn square(n) {
     return n * n;
 }
 
-fn add(a, b) {
+pub fn add(a, b) {
     return a + b;
 }
 
-fn greet(name) {
+pub fn greet(name) {
     return "hi " + name;
 }

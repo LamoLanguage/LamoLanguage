@@ -61,6 +61,15 @@ typedef enum {
     AST_ENUM_DECL,
     AST_MATCH_STMT,
     AST_STRUCT_LITERAL,
+    /* 2.7.0 (FU4): qualified variant reference in VALUE position —
+     * `Enum::Variant` for a unit variant (e.g. `Option::None`). The
+     * semantic pass resolves the pair against the enum table and stamps
+     * sema_enum_name + sema_variant_index on the base node; codegen
+     * emits lamo_make_enum / lamo_make_int directly so the value does
+     * not depend on the (shadowable) bare-variant globals. Qualified
+     * constructor CALLS (`Enum::Variant(args)`) reuse AST_CALL_EXPR /
+     * AST_CALL_STMT with the compound name "Enum::Variant". */
+    AST_VARIANT_REF,
     /* Phase 2: place-assignment statement - `arr[i] = value;` and
      * `obj.field = value;`. `target` is an AST_INDEX_EXPR or AST_PROP_EXPR
      * representing the lvalue, `value` is the RHS, `op_type` is `=`, `+=`,
@@ -238,6 +247,16 @@ typedef struct {
     char* name;
 } ASTIdentifier;
 
+/* 2.7.0 (FU4): qualified variant value reference — `Enum::Variant`.
+ * Both strings are owned by the AST and freed in ast_free(). The
+ * semantic pass stamps the usual sema_enum_name / sema_variant_index
+ * base-node fields so codegen can emit the value directly. */
+typedef struct {
+    ASTNode base;
+    char* enum_name;
+    char* variant_name;
+} ASTVariantRef;
+
 typedef struct {
     ASTNode base;
     char* name;
@@ -396,28 +415,64 @@ typedef struct {
     int type_param_count;
 } ASTEnumDecl;
 
+/* 2.7.0 (FU2): match pattern tree. An arm's top-level pattern is one
+ * LamoPattern; payload positions hold child patterns recursively.
+ *
+ * kinds:
+ *   LAMO_PATTERN_WILDCARD  `_` — matches anything, binds nothing.
+ *   LAMO_PATTERN_BINDING   a bare identifier in a NESTED position —
+ *                          binds the payload value to `name` for the
+ *                          arm body. Top-level bare identifiers are
+ *                          constructor patterns (variant names), not
+ *                          bindings.
+ *   LAMO_PATTERN_CTOR      a variant constructor — `Some`, `Some(x)`,
+ *                          `Enum::Variant`, `Enum::Variant(a, b)`, or
+ *                          nested `Some(Pair(a, b))`. `name` is the
+ *                          variant name, possibly qualified as
+ *                          "Enum::Variant" (owned). `children` holds
+ *                          one sub-pattern per payload slot.
+ *
+ * sema_enum_name / sema_variant_index are stamped by the semantic pass
+ * for LAMO_PATTERN_CTOR nodes (borrowed enum name, index within that
+ * enum — NOT owned, not freed). Codegen reads them to emit tag checks
+ * and lamo_enum_payload chains without re-resolving names. */
+enum {
+    LAMO_PATTERN_WILDCARD = 0,
+    LAMO_PATTERN_BINDING  = 1,
+    LAMO_PATTERN_CTOR     = 2
+};
+
+typedef struct LamoPattern {
+    int kind;
+    char* name;                       /* binding/variant name; "_" for wildcard */
+    struct LamoPattern** children;    /* ctor payloads (may be NULL) */
+    int child_count;
+    int line;
+    int column;
+    /* semantic stamps (ctor patterns only) */
+    const char* sema_enum_name;
+    int sema_variant_index;
+} LamoPattern;
+
 /* Phase 2: match statement.
  *   match color { Red => print("red"); _ => print("other"); }
- * patterns[i] is the variant name (or "_" for wildcard), strdup'd.
- * pattern_is_wildcard[i] is 1 for "_", 0 otherwise.
+ *
+ * 2.7.0 (FU2): each arm is a (pattern, guard, body) triple.
+ * patterns[i] is the arm's pattern tree (owned; freed by ast_free).
+ * guards[i] is an optional `when` expression — `Some(x) when x > 0 =>`
+ * — owned; NULL when the arm has no guard. An arm whose guard fails
+ * falls through to the next arm; guarded arms do NOT count toward
+ * exhaustiveness (SPEC §4.6).
  * bodies[i] is a statement node (owned).
  *
- * 2.6.0: payload bindings — `Some(x, y) => ...`. pattern_bindings[a]
- * is a malloc'd array of pattern_binding_counts[a] strdup'd binding
- * names (NULL when the arm has no parens). For arms matching a
- * tagged-union enum variant, the binding count must equal the
- * variant's payload count (validated in the semantic pass); each
- * binding is defined as a read-only local over the arm body.
  * sema_enum_name is set by the semantic pass when the matched enum is
  * a tagged union (borrowed pointer into the ASTEnumDecl->name; the
  * codegen uses it to switch to the tag-compare desugar). */
 typedef struct {
     ASTNode base;
     struct ASTNode* scrutinee;
-    char** patterns;
-    int* pattern_is_wildcard;
-    char*** pattern_bindings;
-    int* pattern_binding_counts;
+    LamoPattern** patterns;
+    struct ASTNode** guards;
     struct ASTNode** bodies;
     int arm_count;
     const char* sema_enum_name;
@@ -570,21 +625,31 @@ ASTNode* ast_new_enum_decl_full(char* name, char** variants, int variant_count,
 ASTNode* ast_new_enum_decl(char* name, char** variants, int variant_count, int line, int column);
 
 /* match expr { Pat => body, ... }
- * `patterns` is an array of strdup'd pattern names ("_" for wildcard).
- * `pattern_is_wildcard` is an array of 0/1 (1 = wildcard "_").
- * `bodies` is an array of ASTNode* (we take ownership). All arrays have
- * arm_count entries. The caller retains ownership of the input arrays
- * (we copy/stread what we need).
- *
- * 2.6.0: pattern_bindings / pattern_binding_counts carry the optional
- * payload-binding lists (`Some(x) => ...`). pattern_bindings[a] may be
- * NULL (no parens on that arm); entries are strdup'd here. Pass NULL
- * for the plain no-binding form. */
-ASTNode* ast_new_match_stmt_full(ASTNode* scrutinee, char** patterns, int* pattern_is_wildcard,
-                                 char*** pattern_bindings, int* pattern_binding_counts,
-                                 ASTNode** bodies, int arm_count, int line, int column);
-/* Legacy wrapper: no payload bindings on any arm. */
-ASTNode* ast_new_match_stmt(ASTNode* scrutinee, char** patterns, int* pattern_is_wildcard, ASTNode** bodies, int arm_count, int line, int column);
+ * 2.7.0 (FU2): each arm is a (LamoPattern*, guard, body) triple.
+ * `patterns` / `guards` / `bodies` are arrays of arm_count entries.
+ * The AST takes OWNERSHIP of the pattern trees, the guard nodes and
+ * the body nodes (they must be malloc'd / built by the caller and are
+ * freed by ast_free). guards[i] may be NULL (no `when` on that arm).
+ * The caller retains ownership of the ARRAYS themselves — the AST
+ * deep-copies the contents into its own arrays, so the parser frees
+ * the input arrays after the call. */
+ASTNode* ast_new_match_stmt_full(ASTNode* scrutinee, LamoPattern** patterns,
+                                 ASTNode** guards, ASTNode** bodies,
+                                 int arm_count, int line, int column);
+
+/* 2.7.0 (FU4): `Enum::Variant` qualified unit-variant value reference.
+ * Both strings are strdup'd (owned by the AST). */
+ASTNode* ast_new_variant_ref(const char* enum_name, const char* variant_name,
+                             int line, int column);
+
+/* 2.7.0 (FU2): pattern-tree constructors. Each returns a malloc'd
+ * LamoPattern the caller assembles into arms. `ast_pattern_ctor` takes
+ * ownership of the children array (contents AND array). */
+LamoPattern* ast_pattern_wildcard(int line, int column);
+LamoPattern* ast_pattern_binding(const char* name, int line, int column);
+LamoPattern* ast_pattern_ctor(const char* name, LamoPattern** children, int child_count,
+                              int line, int column);
+void ast_pattern_free(LamoPattern* pat);
 
 /* Struct literal: Name { field: value, ... }
  * `field_names` and `field_values` are arrays of size field_count.

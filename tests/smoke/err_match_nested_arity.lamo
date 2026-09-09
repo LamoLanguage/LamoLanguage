@@ -1,0 +1,9 @@
+enum Option<T> { Some(T), None }
+enum Pair { P(int, int) }
+fn main() {
+    let v = Some(P(1, 2));
+    match v {
+        Some(P(a)) => print(a),
+        _ => print("?"),
+    }
+}

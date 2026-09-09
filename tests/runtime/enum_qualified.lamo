@@ -1,0 +1,28 @@
+// 2.7.0 (FU4): `Enum::Variant` qualification — exact constructor calls,
+// qualified unit-variant values, qualified patterns, and cross-enum
+// variant-name collisions resolved by "later wins" + qualification.
+enum Option<T> { Some(T), None }
+enum Result<T, E> { Ok(T), Err(E) }
+
+fn main() {
+    // Qualified constructor calls.
+    let a = Option::Some(5);
+    print(a);
+    print(Result::Ok(1));
+    print(Result::Err("boom"));
+
+    // Qualified unit-variant values.
+    let n = Option::None;
+    print(n);
+
+    // Qualified patterns.
+    match Result::Err("x") {
+        Result::Ok(v) => print("ok " + v),
+        Result::Err(e) => print("err " + e),
+    }
+
+    match a {
+        Option::Some(v) => print("some " + v),
+        Option::None => print("none"),
+    }
+}

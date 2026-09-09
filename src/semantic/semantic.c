@@ -205,11 +205,13 @@ static void semantic_error_at_hint(SemanticContext* ctx, int line, int column,
 static int builtin_function_arity(const char* name);
 static LamoType builtin_function_return_type(const char* name, ASTNode** args, int arg_count);
 static int semantic_validate_builtin_call(SemanticContext* ctx, const char* name, ASTNode** args, int arg_count, int line, int column);
-/* 2.6.0 (FU5): §10.6 step-1 export warning — defined near the bottom of
- * this file; called from the AST_MEMBER_CALL / AST_PROP_EXPR paths. */
-static void semantic_warn_module_export(SemanticContext* ctx,
-                                        const char* alias, const char* member,
-                                        int line, int column);
+/* 2.6.0 (FU5) step 1 → 2.7.0 (pub step 2) ENFORCED: §10.6 non-pub
+ * module members are a compile error when reached through an alias —
+ * defined near the bottom of this file; called from the AST_MEMBER_CALL
+ * / AST_PROP_EXPR paths. */
+static void semantic_error_module_export(SemanticContext* ctx,
+                                         const char* alias, const char* member,
+                                         int line, int column);
 
 static const char* type_name(LamoType type) {
     switch (type) {
@@ -744,21 +746,34 @@ static ASTEnumDecl* find_enum_def(SemanticContext* ctx, const char* name) {
 
 /* Find an enum variant by name across all registered enums. Returns the
  * variant's index (>= 0) via *out_index, and the enum's name via the
- * return value (borrowed pointer). Returns NULL if not found. */
+ * return value (borrowed pointer). Returns NULL if not found.
+ *
+ * 2.7.0 (FU4): iterates in REVERSE declaration order — when two enums
+ * declare the same variant name, the LATER enum wins (SPEC §3.5). Bare
+ * references to the shadowed variant stay reachable through
+ * `Enum::Variant` qualification. */
 static const char* find_enum_variant_any(SemanticContext* ctx, const char* variant_name, int* out_index) {
     ASTNode* cur;
     if (!variant_name) return NULL;
+    /* Later wins: keep the LAST matching enum in declaration order. */
+    ASTEnumDecl* best = NULL;
+    int best_index = -1;
     for (cur = ctx->enum_defs; cur; cur = cur->next) {
         if (cur->type == AST_ENUM_DECL) {
             ASTEnumDecl* ed = (ASTEnumDecl*)cur;
             int i;
             for (i = 0; i < ed->variant_count; i++) {
                 if (ed->variants[i] && strcmp(ed->variants[i], variant_name) == 0) {
-                    if (out_index) *out_index = i;
-                    return ed->name;
+                    best = ed;
+                    best_index = i;
+                    break;
                 }
             }
         }
+    }
+    if (best) {
+        if (out_index) *out_index = best_index;
+        return best->name;
     }
     return NULL;
 }
@@ -783,6 +798,38 @@ static int enum_decl_is_tagged(const ASTEnumDecl* ed) {
         if (ed->variant_payload_counts[i] > 0) return 1;
     }
     return 0;
+}
+
+/* 2.7.0 (FU4): resolve a QUALIFIED variant — `Enum::Variant`. Returns
+ * the owning ASTEnumDecl and the variant index via *out_index, or NULL
+ * when either the enum or the variant is unknown. Bypasses the bare
+ * "later wins" lookup entirely, so shadowed variants stay reachable. */
+static ASTEnumDecl* find_variant_qualified(SemanticContext* ctx, const char* enum_name,
+                                           const char* variant_name, int* out_index) {
+    ASTEnumDecl* ed = find_enum_def(ctx, enum_name);
+    if (!ed) return NULL;
+    for (int i = 0; i < ed->variant_count; i++) {
+        if (ed->variants[i] && strcmp(ed->variants[i], variant_name) == 0) {
+            if (out_index) *out_index = i;
+            return ed;
+        }
+    }
+    return NULL;
+}
+
+/* 2.7.0 (FU4): split a compound "Enum::Variant" name into its two
+ * parts. Returns 1 when the name is qualified (parts written through
+ * the out params), 0 when the name has no "::". */
+static int split_qualified_variant_name(const char* name, char* out_enum, size_t enum_size,
+                                        char* out_variant, size_t variant_size) {
+    const char* sep = strstr(name, "::");
+    if (!sep) return 0;
+    size_t elen = (size_t)(sep - name);
+    if (elen >= enum_size) elen = enum_size - 1;
+    memcpy(out_enum, name, elen);
+    out_enum[elen] = '\0';
+    snprintf(out_variant, variant_size, "%s", sep + 2);
+    return 1;
 }
 
 /* Find a method on a struct by name. Returns the AST_FN_DECL node, or
@@ -855,6 +902,11 @@ static int lamo_validate_annotation_tree_cursor(SemanticContext* ctx, const ASTS
                   strcmp(head,"bool")==0 || strcmp(head,"string")==0 ||
                   strcmp(head,"array")==0 || strcmp(head,"void")==0;
     if (!leaf_ok && find_struct_def(ctx, head)) leaf_ok = 1;
+    /* 2.7.0 (FU1): declared enums are valid annotation leaves —
+     * `array<Option<int>>`, struct fields of enum type, and enum payload
+     * types all resolve through here. Enum type-argument COUNTS are
+     * validated separately at the declaration sites that care. */
+    if (!leaf_ok && find_enum_def(ctx, head)) leaf_ok = 1;
     if (!leaf_ok && sd) {
         for (int j = 0; j < sd->type_param_count; j++) {
             if (strcmp(head, sd->type_params[j]) == 0) { leaf_ok = 1; break; }
@@ -1114,6 +1166,18 @@ static const char* arg_concrete_full_type(SemanticContext* ctx, ASTNode* node) {
             snprintf(buf, sizeof(buf), "array<%s>", lub);
             return lamo_intern_type(buf);
         }
+        case AST_UNARY_EXPR: {
+            /* 2.7.0 (FU1): `-5` and `!b` carry the operand's concrete
+             * type — negative enum payload args (`Some(-5)`) used to
+             * lose their full type and break enum-annotation matching. */
+            ASTUnaryExpr* un = (ASTUnaryExpr*)node;
+            if (un->operator == TOKEN_MINUS) return arg_concrete_full_type(ctx, un->right);
+            return node->sema_full_type;
+        }
+        case AST_GROUPING_EXPR: {
+            ASTGroupingExpr* gr = (ASTGroupingExpr*)node;
+            return arg_concrete_full_type(ctx, gr->expression);
+        }
         default:
             return node->sema_full_type;  /* set by earlier rounds */
     }
@@ -1301,25 +1365,53 @@ static LamoType semantic_visit_call_full(SemanticContext* ctx, const char* name,
      * checked against the variant's payload count, and concrete
      * payload annotations get a light type check (numeric widening
      * kept, matching §7.3). The call node is annotated so codegen
-     * emits lamo_make_enum instead of a call. */
+     * emits lamo_make_enum instead of a call.
+     *
+     * 2.7.0 (FU4): the name may be QUALIFIED — `Enum::Variant(args)`.
+     * Qualified lookup bypasses the bare "later wins" rule entirely
+     * (that is its purpose); the compound name resolves to an exact
+     * enum + variant pair or errors. */
     {
+        ASTEnumDecl* ved = NULL;
         int vidx = -1;
-        const char* venum = find_enum_variant_any(ctx, name, &vidx);
-        if (venum) {
-            ASTEnumDecl* ved = find_enum_def(ctx, venum);
+        char q_enum[128];
+        char q_variant[128];
+        if (split_qualified_variant_name(name, q_enum, sizeof(q_enum),
+                                         q_variant, sizeof(q_variant))) {
+            ved = find_variant_qualified(ctx, q_enum, q_variant, &vidx);
+            if (!ved) {
+                if (find_enum_def(ctx, q_enum)) {
+                    char message[512];
+                    snprintf(message, sizeof(message),
+                             "enum '%s' has no variant '%s'", q_enum, q_variant);
+                    semantic_error_at(ctx, line, column, message);
+                } else {
+                    char message[512];
+                    snprintf(message, sizeof(message),
+                             "unknown enum '%s' in qualified variant '%s'", q_enum, name);
+                    semantic_error_at(ctx, line, column, message);
+                }
+                return LAMO_TYPE_ENUM;  /* degrade: don't cascade into "unknown function" */
+            }
+        } else {
+            const char* venum = find_enum_variant_any(ctx, name, &vidx);
+            if (venum) ved = find_enum_def(ctx, venum);
+        }
+        if (ved) {
             int pcount = enum_variant_payload_count(ved, vidx);
-            if (ved && pcount > 0) {
+            if (pcount > 0) {
+                const char* display = name;  /* compound or bare, for messages */
                 if (arg_count != pcount) {
                     char message[256];
                     snprintf(message, sizeof(message),
                              "variant '%s' expects %d payload argument(s), got %d",
-                             name, pcount, arg_count);
+                             display, pcount, arg_count);
                     semantic_error_at(ctx, line, column, message);
                 } else if (ved->variant_payloads) {
                     /* Light concrete-payload check. Type-parameter
-                     * payloads (e.g. `Some(T)`) are erased at runtime
-                     * and stay unchecked until enum type annotations
-                     * land (SPEC §13). */
+                     * payloads (e.g. `Some(T)`) were erased at runtime
+                     * and unchecked before 2.7.0 — they now drive the
+                     * enum's concrete full type below (FU1). */
                     for (int i = 0; i < pcount; i++) {
                         const char* ann = ved->variant_payloads[vidx][i];
                         if (!ann || !arg_full[i]) continue;
@@ -1340,10 +1432,10 @@ static LamoType semantic_visit_call_full(SemanticContext* ctx, const char* name,
                         LamoType got = arg_types[i];
                         int numeric_widen = (want == LAMO_TYPE_INT && got == LAMO_TYPE_FLOAT);
                         if (got != LAMO_TYPE_UNKNOWN && got != want && !numeric_widen) {
-                            char message[300];
+                            char message[512];
                             snprintf(message, sizeof(message),
                                      "payload %d of variant '%s': expected '%s', got '%s'",
-                                     i + 1, name, ann, type_name(got));
+                                     i + 1, display, ann, type_name(got));
                             semantic_error_at(ctx, line, column, message);
                         }
                     }
@@ -1351,6 +1443,58 @@ static LamoType semantic_visit_call_full(SemanticContext* ctx, const char* name,
                 if (call_node_for_annotation) {
                     call_node_for_annotation->sema_enum_name = ved->name;
                     call_node_for_annotation->sema_variant_index = vidx;
+                    /* 2.7.0 (FU1): compute the enum's concrete full type
+                     * by binding the enum's type parameters against the
+                     * concrete payload args — `Some(5)` gets full type
+                     * "Option<int>". Used by let-annotation matching and
+                     * generic call-site binding. Only stamped when EVERY
+                     * type parameter is bound from the payloads; a
+                     * partially-inferable enum (payloads don't mention
+                     * all params) degrades to the bare enum name. */
+                    if (ved->type_param_count > 0 && arg_count == pcount && ved->variant_payloads) {
+                        AnnSubstMap emap;
+                        emap.count = ved->type_param_count;
+                        emap.names = (const char**)ved->type_params;
+                        emap.values = calloc((size_t)ved->type_param_count, sizeof(char*));
+                        if (emap.values) {
+                            int bound_all = 1;
+                            for (int i = 0; i < pcount && bound_all; i++) {
+                                const char* ann = ved->variant_payloads[vidx][i];
+                                if (!ann || !arg_full[i]) continue;
+                                /* Bind through this payload annotation
+                                 * ("T" := "int", "array<T>" := "array<int>"). */
+                                ann_bind_pattern(ann, arg_full[i], &emap);
+                            }
+                            for (int t = 0; t < ved->type_param_count; t++) {
+                                if (!emap.values[t]) { bound_all = 0; break; }
+                            }
+                            if (bound_all) {
+                                char buf[160];
+                                snprintf(buf, sizeof(buf), "%s", ved->name);
+                                size_t blen = strlen(buf);
+                                for (int t = 0; t < ved->type_param_count && blen < sizeof(buf); t++) {
+                                    int n = snprintf(buf + blen, sizeof(buf) - blen,
+                                                     "%s%s", t == 0 ? "<" : ",",
+                                                     emap.values[t]);
+                                    if (n < 0 || (size_t)n >= sizeof(buf) - blen) { blen = sizeof(buf); break; }
+                                    blen += (size_t)n;
+                                }
+                                if (blen < sizeof(buf) - 1) {
+                                    buf[blen++] = '>';
+                                    buf[blen] = '\0';
+                                    call_node_for_annotation->sema_full_type =
+                                        lamo_intern_type(buf);
+                                }
+                            } else {
+                                call_node_for_annotation->sema_full_type =
+                                    lamo_intern_type(ved->name);
+                            }
+                            free((void*)emap.values);
+                        }
+                    } else if (ved->type_param_count == 0) {
+                        /* Non-generic enum ctor: the bare name IS the full type. */
+                        call_node_for_annotation->sema_full_type = lamo_intern_type(ved->name);
+                    }
                 }
                 return LAMO_TYPE_ENUM;
             }
@@ -1624,15 +1768,18 @@ static LamoType annotation_to_type_with_ctx(SemanticContext* ctx, const char* an
     if (strcmp(annotation, "array") == 0 || strcmp(annotation, "Array") == 0) return LAMO_TYPE_ARRAY;
     if (strcmp(annotation, "void") == 0 || strcmp(annotation, "Void") == 0) return LAMO_TYPE_VOID;
     /* Phase 2: struct-name annotation. Generics PR 2/3: generic
-     * instantiations like "Pair<int, string>" resolve via their head. */
+     * instantiations like "Pair<int, string>" resolve via their head.
+     * 2.7.0 (FU1): enum-name annotations resolve the same way. */
     {
         char head[64];
         ann_head(annotation, head, sizeof(head));
         if (strchr(annotation, '<') != NULL) {
             if (find_struct_def(ctx, head)) return LAMO_TYPE_STRUCT;
+            if (ctx && find_enum_def(ctx, head)) return LAMO_TYPE_ENUM;
             return LAMO_TYPE_UNKNOWN;
         }
         if (ctx && find_struct_def(ctx, annotation)) return LAMO_TYPE_STRUCT;
+        if (ctx && find_enum_def(ctx, annotation)) return LAMO_TYPE_ENUM;
     }
     return LAMO_TYPE_UNKNOWN;
 }
@@ -1658,11 +1805,76 @@ static LamoType annotation_resolve_full(SemanticContext* ctx, const char* annota
     if (strcmp(head, "array") == 0) return LAMO_TYPE_ARRAY;
     if (strcmp(head, "void") == 0) return LAMO_TYPE_VOID;
     if (ctx && find_struct_def(ctx, head)) return LAMO_TYPE_STRUCT;
+    /* 2.7.0 (FU1): enum annotations — `let o: Option<int> = Some(5);`,
+     * enum-typed parameters and returns (SPEC §3.5). Only the head is
+     * inspected here (matching the struct behavior); type-argument
+     * counts and leaf validity are checked by
+     * validate_enum_annotation() at the sites that report errors. */
+    if (ctx && find_enum_def(ctx, head)) return LAMO_TYPE_ENUM;
     /* A declared TYPE PARAMETER of an enclosing generic fn is legal in
      * signature position; callers bind it at call sites. Report ARRAY? No
      * — report UNKNOWN-with-string and let binding logic decide. The
      * distinction matters so we surface real typos as errors there. */
     return LAMO_TYPE_UNKNOWN;
+}
+
+/* 2.7.0 (FU1): validate an ENUM-typed annotation — `Option<int>`.
+ * Checks that the enum exists (caller guarantees it), that the type-
+ * argument count matches the declaration for generic enums (bare
+ * `Option` for a generic enum is an error; args on a non-generic enum
+ * are an error), and that every argument resolves leaf-wise. Emits a
+ * semantic error and returns 0 on failure, 1 when OK. */
+static int validate_enum_annotation(SemanticContext* ctx, const char* annotation,
+                                    int line, int column) {
+    char* norm = semantic_normalize_type(annotation);
+    char head[64];
+    ann_head(norm, head, sizeof(head));
+    ASTEnumDecl* ed = find_enum_def(ctx, head);
+    if (!ed) { free(norm); return 1; }  /* not an enum head: other checks handle it */
+
+    const char** args = NULL;
+    int arg_count = ann_split_top_args(norm, head, sizeof(head), &args);
+    free(norm);
+
+    if (ed->type_param_count == 0) {
+        if (arg_count >= 0) {
+            char message[256];
+            snprintf(message, sizeof(message),
+                     "enum '%s' is not generic; remove the type arguments from annotation '%s'",
+                     ed->name, annotation);
+            semantic_error_at(ctx, line, column, message);
+            if (args) free((void*)args);
+            return 0;
+        }
+        return 1;
+    }
+
+    /* Generic enum: the annotation must carry exactly type_param_count
+     * arguments (RFC §5.4-style invariance, mirroring struct literals). */
+    if (arg_count < 0 || arg_count != ed->type_param_count) {
+        char message[256];
+        snprintf(message, sizeof(message),
+                 "enum '%s' expects %d type argument(s) in annotation '%s', got %d",
+                 ed->name, ed->type_param_count, annotation,
+                 arg_count < 0 ? 0 : arg_count);
+        semantic_error_at(ctx, line, column, message);
+        if (args) free((void*)args);
+        return 0;
+    }
+
+    int ok = 1;
+    for (int i = 0; i < arg_count; i++) {
+        if (!lamo_validate_annotation_tree(ctx, NULL, args[i])) {
+            char message[256];
+            snprintf(message, sizeof(message),
+                     "enum annotation '%s' has unknown type argument %d ('%s')",
+                     annotation, i + 1, args[i]);
+            semantic_error_at(ctx, line, column, message);
+            ok = 0;
+        }
+    }
+    if (args) free((void*)args);
+    return ok;
 }
 
 /* Legacy wrapper that doesn't take a context — kept for compatibility with
@@ -1753,6 +1965,88 @@ static LamoType infer_fn_return_type_from_body(ASTNode* node, int depth) {
     return found;
 }
 
+/* ── 2.7.0 (FU2/FU4): match pattern helpers ────────────────────────── */
+
+#define LAMO_MAX_PATTERN_BINDINGS 64
+
+/* Collect the BINDING leaves of a pattern tree in extraction order
+ * (depth-first, left-to-right — the same order codegen pulls payloads).
+ * Silently stops at `cap` bindings; the semantic arm-walk reports
+ * nothing here because codegen mirrors the same cap. */
+static void lamo_pattern_collect_bindings(LamoPattern* pat, LamoPattern** out,
+                                          int cap, int* out_count) {
+    if (!pat) return;
+    if (pat->kind == LAMO_PATTERN_BINDING) {
+        if (*out_count < cap) out[(*out_count)++] = pat;
+        return;
+    }
+    if (pat->kind == LAMO_PATTERN_CTOR) {
+        for (int i = 0; i < pat->child_count; i++) {
+            lamo_pattern_collect_bindings(pat->children[i], out, cap, out_count);
+        }
+    }
+}
+
+/* Resolve a NESTED constructor pattern (`Pair(a, b)` inside
+ * `Some(Pair(a, b))`): find its enum + variant (bare names use the
+ * later-wins lookup; `Enum::Variant` resolves exactly), stamp the
+ * sema fields codegen needs, validate payload arity, and recurse.
+ * Emits semantic errors; returns the resolved ASTEnumDecl or NULL. */
+static ASTEnumDecl* lamo_sema_resolve_nested_pattern(SemanticContext* ctx, LamoPattern* pat) {
+    if (!pat || pat->kind != LAMO_PATTERN_CTOR) return NULL;
+    ASTEnumDecl* ed = NULL;
+    int vidx = -1;
+    char q_enum[128];
+    char q_variant[128];
+    if (split_qualified_variant_name(pat->name, q_enum, sizeof(q_enum),
+                                     q_variant, sizeof(q_variant))) {
+        ed = find_variant_qualified(ctx, q_enum, q_variant, &vidx);
+        if (!ed) {
+            char message[512];
+            if (find_enum_def(ctx, q_enum)) {
+                snprintf(message, sizeof(message),
+                         "enum '%s' has no variant '%s' (in nested pattern '%s')",
+                         q_enum, q_variant, pat->name);
+            } else {
+                snprintf(message, sizeof(message),
+                         "unknown enum '%s' in nested pattern '%s'", q_enum, pat->name);
+            }
+            semantic_error_at(ctx, pat->line, pat->column, message);
+            return NULL;
+        }
+    } else {
+        const char* ename = find_enum_variant_any(ctx, pat->name, &vidx);
+        if (!ename) {
+            char message[256];
+            snprintf(message, sizeof(message),
+                     "nested pattern '%s' is not a known enum variant",
+                     pat->name);
+            semantic_error_at(ctx, pat->line, pat->column, message);
+            return NULL;
+        }
+        ed = find_enum_def(ctx, ename);
+        if (!ed) return NULL;
+    }
+    pat->sema_enum_name = ed->name;
+    pat->sema_variant_index = vidx;
+    int pcount = enum_variant_payload_count(ed, vidx);
+    if (pcount != pat->child_count) {
+        char message[256];
+        snprintf(message, sizeof(message),
+                 "nested variant '%s' carries %d payload(s), but the pattern binds %d",
+                 pat->name, pcount, pat->child_count);
+        semantic_error_at(ctx, pat->line, pat->column, message);
+        return ed;  /* stamped anyway so codegen stays consistent */
+    }
+    for (int c = 0; c < pat->child_count; c++) {
+        LamoPattern* child = pat->children[c];
+        if (child && child->kind == LAMO_PATTERN_CTOR) {
+            lamo_sema_resolve_nested_pattern(ctx, child);
+        }
+    }
+    return ed;
+}
+
 static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
     if (!node) {
         return;
@@ -1822,7 +2116,7 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                 if (annotated == LAMO_TYPE_UNKNOWN) {
                     char message[256];
                     snprintf(message, sizeof(message),
-                             "unknown type annotation '%s' (expected int, float, string, bool, array<T>, void, or a struct name)",
+                             "unknown type annotation '%s' (expected int, float, string, bool, array<T>, void, a struct name, or an enum name like Option<int>)",
                              var_decl->type_annotation);
                     semantic_error_at(ctx, node->line, node->column, message);
                 } else if (annotated == LAMO_TYPE_STRUCT) {
@@ -1846,6 +2140,47 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                         }
                     }
                     init_type = LAMO_TYPE_STRUCT;
+                } else if (annotated == LAMO_TYPE_ENUM) {
+                    /* 2.7.0 (FU1): enum-typed annotation — `let o:
+                     * Option<int> = Some(5);`. Validates the type-argument
+                     * count/leaves, then matches the annotation's enum
+                     * head against the initializer's enum (constructor
+                     * calls and qualified references carry their enum in
+                     * sema_enum_name; identifiers fall back to the head
+                     * of their concrete full type). */
+                    validate_enum_annotation(ctx, var_decl->type_annotation,
+                                             node->line, node->column);
+                    const char* init_enum_name = NULL;
+                    if (var_decl->initializer &&
+                        var_decl->initializer->sema_enum_name) {
+                        init_enum_name = var_decl->initializer->sema_enum_name;
+                    } else if (init_type == LAMO_TYPE_ENUM) {
+                        const char* ft = arg_concrete_full_type(ctx, var_decl->initializer);
+                        if (ft) {
+                            char fhead[64];
+                            ann_head(ft, fhead, sizeof(fhead));
+                            if (find_enum_def(ctx, fhead)) init_enum_name = lamo_intern_type(fhead);
+                        }
+                    }
+                    if (init_enum_name) {
+                        char ahead[64];
+                        ann_head(var_decl->type_annotation, ahead, sizeof(ahead));
+                        if (strcmp(init_enum_name, ahead) != 0) {
+                            char message[256];
+                            snprintf(message, sizeof(message),
+                                     "type annotation '%s' does not match enum '%s' value",
+                                     var_decl->type_annotation, init_enum_name);
+                            semantic_error_at(ctx, node->line, node->column, message);
+                        }
+                    }
+                    if (init_type != LAMO_TYPE_UNKNOWN && init_type != LAMO_TYPE_ENUM) {
+                        char message[256];
+                        snprintf(message, sizeof(message),
+                                 "type annotation '%s' does not match inferred type '%s'",
+                                 var_decl->type_annotation, type_name(init_type));
+                        semantic_error_at(ctx, node->line, node->column, message);
+                    }
+                    init_type = LAMO_TYPE_ENUM;
                 } else if (init_type != LAMO_TYPE_UNKNOWN && init_type != annotated) {
                     /* Allow int initializer for float annotation (numeric
                      * widening) and float initializer for int annotation
@@ -2273,10 +2608,15 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
         }
         case AST_CALL_STMT: {
             ASTCallStmt* call_stmt = (ASTCallStmt*)node;
+            /* 2.7.0 (FU4): pass the node so enum-variant constructor
+             * statements (`Some(5);`) get annotated — codegen needs the
+             * sema_enum_name/sema_variant_index stamps to emit
+             * lamo_make_enum instead of a bogus call to the variant
+             * global. */
             semantic_visit_call_full(ctx, call_stmt->name,
                                      call_stmt->type_args, call_stmt->type_arg_count,
                                      call_stmt->args, call_stmt->arg_count,
-                                     node->line, node->column, NULL);
+                                     node->line, node->column, node);
             break;
         }
         case AST_MEMBER_CALL: {
@@ -2497,98 +2837,148 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
         case AST_MATCH_STMT: {
             ASTMatchStmt* ms = (ASTMatchStmt*)node;
             LamoType scrut_type = semantic_infer_expression(ctx, ms->scrutinee);
-            /* Validate each arm's pattern. Patterns can be:
+            /* Validate each arm's pattern tree. Top-level patterns are:
              *   - "_" (wildcard) - always matches
-             *   - Identifier that names an enum variant
-             *   - Variant with payload bindings — `Some(x) =>` (2.6.0)
-             * We check that named patterns correspond to a registered
-             * enum variant. Exhaustiveness is checked below. */
+             *   - a variant constructor (optionally qualified
+             *     `Enum::Variant`) with a recursive payload sub-pattern
+             *     list — 2.7.0 (FU2) supports nested destructuring like
+             *     `Some(Pair(a, b))` and (FU4) qualification.
+             * Binding leaves are collected in extraction order and
+             * defined in a fresh scope covering the guard + body; the
+             * `when` guard is visited in that scope so it can read the
+             * bindings. Exhaustiveness counts only UNGUARDED arms
+             * (Rust-style: a guard can fail, so it does not cover its
+             * variant). */
             int has_wildcard = 0;
             int total_variants = -1;
             const char* scrut_enum_name = NULL;
-            ASTEnumDecl* matched_enum = NULL;  /* 2.6.0: enum decl being matched */
+            ASTEnumDecl* matched_enum = NULL;  /* enum decl being matched */
+
             for (int i = 0; i < ms->arm_count; i++) {
-                if (ms->pattern_is_wildcard[i]) {
+                LamoPattern* pat = ms->patterns[i];
+                if (!pat) continue;
+                if (pat->kind == LAMO_PATTERN_WILDCARD) {
                     has_wildcard = 1;
-                    /* 2.6.0: wildcard arms cannot take bindings. */
-                    if (ms->pattern_bindings && ms->pattern_binding_counts[i] > 0) {
-                        char message[256];
-                        snprintf(message, sizeof(message),
-                                 "wildcard pattern '_' cannot bind payloads");
-                        semantic_error_at(ctx, node->line, node->column, message);
-                    }
-                } else {
+                } else if (pat->kind == LAMO_PATTERN_CTOR) {
+                    ASTEnumDecl* arm_enum = NULL;
                     int vidx = -1;
-                    const char* ename = find_enum_variant_any(ctx, ms->patterns[i], &vidx);
-                    if (!ename) {
-                        char message[256];
-                        snprintf(message, sizeof(message),
-                                 "match pattern '%s' is not a known enum variant (declare an `enum { ... }` first, or use '_' for wildcard)",
-                                 ms->patterns[i]);
-                        semantic_error_at(ctx, node->line, node->column, message);
+                    char q_enum[128];
+                    char q_variant[128];
+                    if (split_qualified_variant_name(pat->name, q_enum, sizeof(q_enum),
+                                                     q_variant, sizeof(q_variant))) {
+                        arm_enum = find_variant_qualified(ctx, q_enum, q_variant, &vidx);
+                        if (!arm_enum) {
+                            char message[512];
+                            if (find_enum_def(ctx, q_enum)) {
+                                snprintf(message, sizeof(message),
+                                         "enum '%s' has no variant '%s' (match pattern '%s')",
+                                         q_enum, q_variant, pat->name);
+                            } else {
+                                snprintf(message, sizeof(message),
+                                         "unknown enum '%s' in match pattern '%s'",
+                                         q_enum, pat->name);
+                            }
+                            semantic_error_at(ctx, pat->line, pat->column, message);
+                        }
                     } else {
-                        ASTEnumDecl* arm_enum = find_enum_def(ctx, ename);
+                        const char* ename = find_enum_variant_any(ctx, pat->name, &vidx);
+                        if (!ename) {
+                            char message[256];
+                            snprintf(message, sizeof(message),
+                                     "match pattern '%s' is not a known enum variant (declare an `enum { ... }` first, or use '_' for wildcard)",
+                                     pat->name);
+                            semantic_error_at(ctx, pat->line, pat->column, message);
+                        } else {
+                            arm_enum = find_enum_def(ctx, ename);
+                        }
+                    }
+                    if (arm_enum) {
                         /* Track the enum we're matching against. */
                         if (scrut_enum_name == NULL) {
-                            scrut_enum_name = ename;
+                            scrut_enum_name = arm_enum->name;
                             matched_enum = arm_enum;
                             total_variants = arm_enum->variant_count;
-                        } else if (strcmp(scrut_enum_name, ename) != 0) {
+                        } else if (strcmp(scrut_enum_name, arm_enum->name) != 0) {
                             char message[256];
                             snprintf(message, sizeof(message),
                                      "match arm pattern '%s' belongs to enum '%s', but earlier arms matched enum '%s'",
-                                     ms->patterns[i], ename, scrut_enum_name);
-                            semantic_error_at(ctx, node->line, node->column, message);
+                                     pat->name, arm_enum->name, scrut_enum_name);
+                            semantic_error_at(ctx, pat->line, pat->column, message);
                         }
-                        /* 2.6.0: payload-binding validation for tagged
-                         * unions — binding count must equal the variant's
-                         * payload count, in both directions. */
-                        if (arm_enum) {
-                            int pcount = enum_variant_payload_count(arm_enum, vidx);
-                            int bcount = ms->pattern_bindings ? ms->pattern_binding_counts[i] : 0;
-                            if (pcount > 0 && bcount == 0) {
-                                char message[256];
-                                snprintf(message, sizeof(message),
-                                         "variant '%s' carries %d payload(s); bind them: %s(a) => ...",
-                                         ms->patterns[i], pcount, ms->patterns[i]);
-                                semantic_error_at(ctx, node->line, node->column, message);
-                            } else if (pcount == 0 && bcount > 0) {
-                                char message[256];
-                                snprintf(message, sizeof(message),
-                                         "variant '%s' carries no payloads; remove the binding list from the pattern",
-                                         ms->patterns[i]);
-                                semantic_error_at(ctx, node->line, node->column, message);
-                            } else if (pcount > 0 && bcount > 0 && pcount != bcount) {
-                                char message[256];
-                                snprintf(message, sizeof(message),
-                                         "variant '%s' carries %d payload(s), but the pattern binds %d",
-                                         ms->patterns[i], pcount, bcount);
-                                semantic_error_at(ctx, node->line, node->column, message);
+                        /* Stamp for codegen (tag check + payload pulls). */
+                        pat->sema_enum_name = arm_enum->name;
+                        pat->sema_variant_index = vidx;
+                        /* Top-level arity: payload count vs child count. */
+                        int pcount = enum_variant_payload_count(arm_enum, vidx);
+                        if (pcount == 0 && pat->child_count > 0) {
+                            char message[256];
+                            snprintf(message, sizeof(message),
+                                     "variant '%s' carries no payloads; remove the binding list from the pattern",
+                                     pat->name);
+                            semantic_error_at(ctx, pat->line, pat->column, message);
+                        } else if (pcount > 0 && pat->child_count == 0) {
+                            char message[256];
+                            snprintf(message, sizeof(message),
+                                     "variant '%s' carries %d payload(s); bind them: %s(a) => ...",
+                                     pat->name, pcount, pat->name);
+                            semantic_error_at(ctx, pat->line, pat->column, message);
+                        } else if (pcount > 0 && pat->child_count != pcount) {
+                            char message[256];
+                            snprintf(message, sizeof(message),
+                                     "variant '%s' carries %d payload(s), but the pattern binds %d",
+                                     pat->name, pcount, pat->child_count);
+                            semantic_error_at(ctx, pat->line, pat->column, message);
+                        }
+                        /* NESTED payload sub-patterns (FU2): each ctor
+                         * child must itself resolve to a known variant
+                         * with matching arity; errors are emitted inside.
+                         * Nested payload values are erased LamoValues —
+                         * the payload's enum type is not statically
+                         * known, so any declared variant is accepted and
+                         * the tag check happens at runtime. */
+                        for (int c = 0; c < pat->child_count; c++) {
+                            LamoPattern* child = pat->children[c];
+                            if (child && child->kind == LAMO_PATTERN_CTOR) {
+                                lamo_sema_resolve_nested_pattern(ctx, child);
                             }
                         }
                     }
                 }
-                /* Visit the arm body. 2.6.0: binding names are defined in
-                 * a fresh scope that covers exactly the arm body, so
-                 * `Some(x)` binds `x` without leaking into later arms. */
-                if (ms->bodies[i]) {
-                    int bcount = (ms->pattern_bindings && !ms->pattern_is_wildcard[i])
-                                     ? ms->pattern_binding_counts[i] : 0;
-                    if (bcount > 0) {
-                        Scope* parent = ctx->current_scope;
-                        ctx->current_scope = scope_push(parent);
-                        for (int b = 0; b < bcount; b++) {
-                            const char* bname = ms->pattern_bindings[i][b];
-                            if (!bname) continue;
-                            scope_define(ctx, ctx->current_scope, bname, SYMBOL_VAR, 0,
-                                         LAMO_TYPE_UNKNOWN, node->line, node->column,
-                                         node->file_path);
-                        }
-                        semantic_visit_statement(ctx, ms->bodies[i]);
-                        ctx->current_scope = parent;
-                    } else {
-                        semantic_visit_statement(ctx, ms->bodies[i]);
+            }
+            /* Visit guards and bodies. Binding leaves are defined in a
+             * fresh per-arm scope in EXTRACTION order (depth-first,
+             * left-to-right — the same order codegen pulls payloads),
+             * so `Some(Pair(a, b))` binds `a` then `b`. */
+            for (int i = 0; i < ms->arm_count; i++) {
+                LamoPattern* pat = ms->patterns[i];
+                if (!ms->bodies[i] && !ms->guards[i]) continue;
+                LamoPattern* leaf_bindings[LAMO_MAX_PATTERN_BINDINGS];
+                int nb = 0;
+                if (pat) lamo_pattern_collect_bindings(pat, leaf_bindings,
+                                                       LAMO_MAX_PATTERN_BINDINGS, &nb);
+                Scope* parent = ctx->current_scope;
+                if (nb > 0) {
+                    ctx->current_scope = scope_push(parent);
+                    for (int b = 0; b < nb; b++) {
+                        scope_define(ctx, ctx->current_scope, leaf_bindings[b]->name,
+                                     SYMBOL_VAR, 0, LAMO_TYPE_UNKNOWN,
+                                     leaf_bindings[b]->line, leaf_bindings[b]->column,
+                                     node->file_path);
                     }
+                }
+                /* 2.7.0 (FU2): the `when` guard sees the bindings and
+                 * must itself be a truthy-compatible expression (void is
+                 * rejected, matching if/while conditions). */
+                if (ms->guards[i]) {
+                    LamoType gt = semantic_infer_expression(ctx, ms->guards[i]);
+                    semantic_check_truthy_operand(ctx, gt, "match guard",
+                                                  ms->guards[i]->line, ms->guards[i]->column);
+                }
+                if (ms->bodies[i]) {
+                    semantic_visit_statement(ctx, ms->bodies[i]);
+                }
+                if (nb > 0) {
+                    ctx->current_scope = parent;
                 }
             }
             /* 2.6.0: annotate the match so codegen uses the tag-compare
@@ -2596,33 +2986,39 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
             if (matched_enum && enum_decl_is_tagged(matched_enum)) {
                 ms->sema_enum_name = matched_enum->name;
             }
-            /* Exhaustiveness check: if we know the enum (total_variants > 0)
-             * and there's no wildcard, count unique variants. If the count
-             * is less than total_variants, warn (but don't error - the user
-             * might intentionally not handle all cases). */
+            /* Exhaustiveness: with no wildcard arm, every variant must
+             * be covered by at least one UNGUARDED arm — a guarded arm
+             * can fail its condition and fall through (SPEC §4.6). */
             if (!has_wildcard && total_variants > 0) {
-                /* Count unique variant names among the patterns. */
                 int unique = 0;
                 for (int i = 0; i < ms->arm_count; i++) {
-                    if (ms->pattern_is_wildcard[i]) continue;
+                    LamoPattern* pat = ms->patterns[i];
+                    if (!pat || pat->kind != LAMO_PATTERN_CTOR) continue;
+                    if (ms->guards[i]) continue;  /* guarded arms don't cover */
+                    const char* bare = pat->name;
+                    const char* sep = strstr(pat->name, "::");
+                    if (sep) bare = sep + 2;
                     int dup = 0;
                     for (int j = 0; j < i; j++) {
-                        if (strcmp(ms->patterns[i], ms->patterns[j]) == 0) {
-                            dup = 1; break;
-                        }
+                        LamoPattern* prev = ms->patterns[j];
+                        if (!prev || prev->kind != LAMO_PATTERN_CTOR) continue;
+                        if (ms->guards[j]) continue;
+                        const char* prev_bare = prev->name;
+                        const char* prev_sep = strstr(prev->name, "::");
+                        if (prev_sep) prev_bare = prev_sep + 2;
+                        if (strcmp(bare, prev_bare) == 0) { dup = 1; break; }
                     }
                     if (!dup) unique++;
                 }
                 if (unique < total_variants) {
-                    /* Emit a warning (not an error - Lamo doesn't have a
-                     * separate warning channel, so we use stderr directly). */
+                    /* Kept as a compile error for 2.7.0 (the pre-2.7.0
+                     * behavior was already fatal despite the "warning"
+                     * wording); the message keeps its historical shape. */
                     char message[256];
                     snprintf(message, sizeof(message),
                              "warning: match on enum '%s' is not exhaustive (%d of %d variants covered; add a '_' arm or cover the rest)",
                              scrut_enum_name, unique, total_variants);
                     semantic_error_at(ctx, node->line, node->column, message);
-                } else if (unique > total_variants) {
-                    /* Duplicate variant - already checked above per-enum. */
                 }
             }
             (void)scrut_type;
@@ -2721,6 +3117,42 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
                 }
             }
             return symbol->type;
+        }
+        case AST_VARIANT_REF: {
+            /* 2.7.0 (FU4): qualified variant value — `Enum::Variant`.
+             * Resolved exactly (no "later wins"), stamped for codegen.
+             * Payload variants cannot be values, same as the bare form. */
+            ASTVariantRef* vr = (ASTVariantRef*)node;
+            int vidx = -1;
+            ASTEnumDecl* ved = find_variant_qualified(ctx, vr->enum_name, vr->variant_name, &vidx);
+            if (!ved) {
+                char message[512];
+                if (find_enum_def(ctx, vr->enum_name)) {
+                    snprintf(message, sizeof(message),
+                             "enum '%s' has no variant '%s'", vr->enum_name, vr->variant_name);
+                } else {
+                    snprintf(message, sizeof(message),
+                             "unknown enum '%s' in qualified variant '%s::%s'",
+                             vr->enum_name, vr->enum_name, vr->variant_name);
+                }
+                semantic_error_at(ctx, node->line, node->column, message);
+                return LAMO_TYPE_UNKNOWN;
+            }
+            if (enum_variant_payload_count(ved, vidx) > 0) {
+                char message[256];
+                char hint[256];
+                snprintf(message, sizeof(message),
+                         "variant '%s::%s' carries a payload and cannot be used as a value",
+                         vr->enum_name, vr->variant_name);
+                snprintf(hint, sizeof(hint),
+                         "construct it with %s::%s(...) and match with %s::%s(x) => ...",
+                         vr->enum_name, vr->variant_name, vr->enum_name, vr->variant_name);
+                semantic_error_at_hint(ctx, node->line, node->column, message, hint);
+                return LAMO_TYPE_UNKNOWN;
+            }
+            node->sema_enum_name = ved->name;
+            node->sema_variant_index = vidx;
+            return enum_decl_is_tagged(ved) ? LAMO_TYPE_ENUM : LAMO_TYPE_INT;
         }
         case AST_BINARY_EXPR: {
             ASTBinaryExpr* expr = (ASTBinaryExpr*)node;
@@ -2863,7 +3295,7 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
                         }
                     }
                     /* 2.6.0 (FU5): §10.6 step-1 export warning. */
-                    semantic_warn_module_export(ctx, alias, mc->member_name,
+                    semantic_error_module_export(ctx, alias, mc->member_name,
                                                 node->line, node->column);
                 }
             }
@@ -3127,7 +3559,7 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
                 const char* alias = ((ASTIdentifier*)pe->object)->name;
                 if (ctx->module_resolve && ctx->module_resolve(alias, pe->prop_name, ctx->module_user_data)) {
                     /* 2.6.0 (FU5): §10.6 step-1 export warning. */
-                    semantic_warn_module_export(ctx, alias, pe->prop_name,
+                    semantic_error_module_export(ctx, alias, pe->prop_name,
                                                 node->line, node->column);
                     /* It's a module variable. Mark the node so codegen can
                      * find the alias without re-doing the lookup. We store
@@ -3335,25 +3767,31 @@ int semantic_analyze_with_source_lookup(ASTProgram* program, const char* file_pa
                                   NULL, NULL, NULL, NULL);
 }
 
-/* 2.6.0 (FU5): §10.6 explicit-export two-step rollout — STEP 1.
- * Non-pub members reached through a module alias still compile and run,
- * but warn ONCE per member so codebases can add explicit `pub` before a
- * future release enforces the boundary (step 2). */
-static void semantic_warn_module_export(SemanticContext* ctx,
-                                        const char* alias, const char* member,
-                                        int line, int column) {
+/* 2.6.0 (FU5) / 2.7.0 (FU2-ledger): §10.6 explicit-export two-step
+ * rollout — STEP 2 (ENFORCED as of 2.7.0). Non-`pub` members reached
+ * through a module alias are now a compile ERROR: the boundary promised
+ * in step 1 ("it will become private in a future release") is real.
+ * The migration stays strictly mechanical: add `pub` where the error
+ * points. The once-per-member flag is kept so a member used several
+ * times reports at its FIRST use only, mirroring the step-1 warning. */
+static void semantic_error_module_export(SemanticContext* ctx,
+                                         const char* alias, const char* member,
+                                         int line, int column) {
     LamoModuleMember* mem;
     if (!ctx->module_registry || !alias || !member) return;
     mem = lamo_modules_find_member(ctx->module_registry, alias, member);
     if (!mem || mem->is_pub || mem->warned_not_pub) return;
-    mem->warned_not_pub = 1;
+    mem->warned_not_pub = 1;  /* one diagnostic per member */
     {
         char message[300];
+        char hint[200];
         snprintf(message, sizeof(message),
-                 "member '%s' of module '%s' is not marked 'pub'; "
-                 "it will become private in a future release — add 'pub' to export it explicitly",
+                 "member '%s' of module '%s' is not marked 'pub' and cannot be accessed through the module alias (§10.6 step 2, enforced in 2.7.0)",
                  member, alias);
-        semantic_warn_at(ctx, line, column, message);
+        snprintf(hint, sizeof(hint),
+                 "add 'pub' to the declaration of '%s' in the module file to export it explicitly",
+                 member);
+        semantic_error_at_hint(ctx, line, column, message, hint);
     }
 }
 
@@ -3410,16 +3848,75 @@ int semantic_analyze_full(ASTProgram* program, const char* file_path,
      * instead — their runtime representation is a tagged LamoValue, not
      * a plain int (SPEC §3.5). Unit variants of tagged enums are still
      * usable as bare identifiers (they are values); payload variants
-     * only through constructor calls, enforced at the identifier site. */
-    for (ASTNode* node = program->declarations; node; node = node->next) {
-        if (node->type == AST_ENUM_DECL) {
-            ASTEnumDecl* ed = (ASTEnumDecl*)node;
-            LamoType variant_type = enum_decl_is_tagged(ed) ? LAMO_TYPE_ENUM : LAMO_TYPE_INT;
-            for (int i = 0; i < ed->variant_count; i++) {
-                /* Register the variant name as a global constant. */
-                scope_define(&ctx, ctx.current_scope, ed->variants[i], SYMBOL_VAR, 0, variant_type, node->line, node->column, node->file_path);
+     * only through constructor calls, enforced at the identifier site.
+     *
+     * 2.7.0 (FU4): variant-name collisions ACROSS ENUMS are now legal
+     * ("later wins", SPEC §3.5) — the symbol is retargeted to the later
+     * enum's variant and a one-time shadowing warning points at the
+     * `Enum::Variant` qualification that disambiguates. Collisions with
+     * USER variables/functions remain hard errors. */
+    {
+        /* Track registered variant names so an enum-vs-enum collision
+         * can be distinguished from an enum-vs-user-declaration one.
+         * Parallel arrays: name / owning enum. */
+        char** rv_names = NULL;
+        const char** rv_enums = NULL;
+        int rv_count = 0;
+        int rv_cap = 0;
+        for (ASTNode* node = program->declarations; node; node = node->next) {
+            if (node->type == AST_ENUM_DECL) {
+                ASTEnumDecl* ed = (ASTEnumDecl*)node;
+                LamoType variant_type = enum_decl_is_tagged(ed) ? LAMO_TYPE_ENUM : LAMO_TYPE_INT;
+                for (int i = 0; i < ed->variant_count; i++) {
+                    const char* vname = ed->variants[i];
+                    Symbol* existing = scope_find_in_current(ctx.current_scope, vname);
+                    int prev_is_variant = 0;
+                    const char* prev_enum = NULL;
+                    for (int r = 0; r < rv_count; r++) {
+                        if (strcmp(rv_names[r], vname) == 0) {
+                            prev_is_variant = 1;
+                            prev_enum = rv_enums[r];
+                            break;
+                        }
+                    }
+                    if (existing && prev_is_variant) {
+                        /* Later-wins: retarget the symbol to this enum's
+                         * variant and warn once per shadowed name. */
+                        existing->type = variant_type;
+                        char message[320];
+                        snprintf(message, sizeof(message),
+                                 "variant '%s' of enum '%s' shadows variant '%s' of enum '%s'; bare '%s' now refers to the later declaration (disambiguate with %s::%s or %s::%s)",
+                                 vname, ed->name, vname, prev_enum,
+                                 vname, ed->name, vname, prev_enum, vname);
+                        semantic_warn_at(&ctx, node->line, node->column, message);
+                    } else {
+                        /* First registration (or collision with a user
+                         * declaration — scope_define reports that). */
+                        scope_define(&ctx, ctx.current_scope, vname, SYMBOL_VAR, 0, variant_type, node->line, node->column, node->file_path);
+                    }
+                    /* Record in the shadow-tracking table. */
+                    if (rv_count == rv_cap) {
+                        int new_cap = rv_cap > 0 ? rv_cap * 2 : 16;
+                        char** n_names = realloc(rv_names, sizeof(char*) * (size_t)new_cap);
+                        const char** n_enums = realloc(rv_enums, sizeof(const char*) * (size_t)new_cap);
+                        if (n_names && n_enums) {
+                            rv_names = n_names; rv_enums = n_enums;
+                            rv_cap = new_cap;
+                        } else {
+                            /* OOM: keep compiling without shadow tracking. */
+                            if (n_names) rv_names = n_names;
+                            if (n_enums) rv_enums = n_enums;
+                            break;
+                        }
+                    }
+                    rv_names[rv_count] = strdup(vname);
+                    rv_enums[rv_count] = ed->name;
+                    rv_count++;
+                }
             }
         }
+        for (int r = 0; r < rv_count; r++) free(rv_names[r]);
+        free(rv_names); free(rv_enums);
     }
 
     for (ASTNode* node = program->declarations; node; node = node->next) {

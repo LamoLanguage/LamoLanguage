@@ -1,0 +1,55 @@
+// 2.7.0 (FU1): enum type annotations — `let`, parameters, returns,
+// for-lets, and nested annotation positions. Must pass `lamo check`
+// with no diagnostics.
+enum Option<T> { Some(T), None }
+enum Shape { Circle(int), Square(int) }
+enum Label { Tag(string) }
+
+struct Holder {
+    inner: Option<int>,
+    shape: Shape,
+}
+
+fn pick(o: Option<int>, d: int) -> int {
+    match o {
+        Some(v) => return v,
+        None => return d,
+    }
+    return d
+}
+
+fn wrap(x: int) -> Option<int> {
+    if (x > 0) {
+        return Some(x)
+    }
+    return None
+}
+
+fn describe(s: Shape) -> string {
+    match s {
+        Shape::Circle(_) => return "circle",
+        Shape::Square(_) => return "square",
+    }
+    return "?"
+}
+
+let g1: Option<int> = Some(1);
+let g2: Shape = Square(2);
+let g3 = g1;
+
+fn main() {
+    let a: Option<int> = Some(10);
+    let b: Option<int> = None;
+    let c = a;
+    let d: Shape = Circle(-3);
+    let e: array<Option<int>> = [Some(1), None, Some(3)];
+    let f: Option<int> = wrap(5);
+    for (let i: Option<int> = Some(0); pick(i, 9) < 1; ) {
+        break
+    }
+    let h: Holder = Holder { inner: Some(7), shape: Square(1) };
+    let lbl: Label = Tag("hi");
+    print(pick(a, 0));
+    print(pick(b, 0));
+    print(describe(d));
+}

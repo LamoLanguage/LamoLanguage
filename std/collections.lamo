@@ -28,29 +28,29 @@
 
 // ─── List ────────────────────────────────────────────────────────────
 
-fn newList() {
+pub fn newList() {
     return []
 }
 
-fn listPush(list, value) {
+pub fn listPush(list, value) {
     push(list, value)
     return list.len()
 }
 
-fn listPop(list) {
+pub fn listPop(list) {
     return pop(list)
 }
 
-fn listGet(list, i) {
+pub fn listGet(list, i) {
     return list[i]
 }
 
-fn listSet(list, i, value) {
+pub fn listSet(list, i, value) {
     list[i] = value
     return value
 }
 
-fn listInsert(list, i, value) {
+pub fn listInsert(list, i, value) {
     let n = list.len()
     push(list, 0)
     let j = n
@@ -62,7 +62,7 @@ fn listInsert(list, i, value) {
     return list.len()
 }
 
-fn listRemoveAt(list, i) {
+pub fn listRemoveAt(list, i) {
     let n = list.len()
     let removed = list[i]
     let j = i
@@ -74,7 +74,7 @@ fn listRemoveAt(list, i) {
     return removed
 }
 
-fn listContains(list, value) {
+pub fn listContains(list, value) {
     let i = 0
     while (i < list.len()) {
         if (list[i] == value) { return 1 }
@@ -83,7 +83,7 @@ fn listContains(list, value) {
     return 0
 }
 
-fn listIndexOf(list, value) {
+pub fn listIndexOf(list, value) {
     let i = 0
     while (i < list.len()) {
         if (list[i] == value) { return i }
@@ -92,16 +92,16 @@ fn listIndexOf(list, value) {
     return -1
 }
 
-fn listLen(list) {
+pub fn listLen(list) {
     return list.len()
 }
 
-fn listIsEmpty(list) {
+pub fn listIsEmpty(list) {
     if (list.len() == 0) { return 1 }
     return 0
 }
 
-fn listClear(list) {
+pub fn listClear(list) {
     while (list.len() > 0) {
         pop(list)
     }
@@ -110,35 +110,35 @@ fn listClear(list) {
 
 // ─── Stack (LIFO; push/pop from end) ─────────────────────────────────
 
-fn newStack() {
+pub fn newStack() {
     return []
 }
 
-fn stackPush(stack, value) {
+pub fn stackPush(stack, value) {
     push(stack, value)
     return stack.len()
 }
 
-fn stackPop(stack) {
+pub fn stackPop(stack) {
     return pop(stack)
 }
 
-fn stackPeek(stack) {
+pub fn stackPeek(stack) {
     let n = stack.len()
     if (n == 0) { return 0 }
     return stack[n - 1]
 }
 
-fn stackLen(stack) {
+pub fn stackLen(stack) {
     return stack.len()
 }
 
-fn stackIsEmpty(stack) {
+pub fn stackIsEmpty(stack) {
     if (stack.len() == 0) { return 1 }
     return 0
 }
 
-fn stackClear(stack) {
+pub fn stackClear(stack) {
     while (stack.len() > 0) {
         pop(stack)
     }
@@ -147,16 +147,16 @@ fn stackClear(stack) {
 
 // ─── Queue (FIFO; enqueue at end, dequeue at front) ──────────────────
 
-fn newQueue() {
+pub fn newQueue() {
     return []
 }
 
-fn queueEnqueue(queue, value) {
+pub fn queueEnqueue(queue, value) {
     push(queue, value)
     return queue.len()
 }
 
-fn queueDequeue(queue) {
+pub fn queueDequeue(queue) {
     if (queue.len() == 0) { return 0 }
     let front = queue[0]
     let i = 0
@@ -169,21 +169,21 @@ fn queueDequeue(queue) {
     return front
 }
 
-fn queuePeek(queue) {
+pub fn queuePeek(queue) {
     if (queue.len() == 0) { return 0 }
     return queue[0]
 }
 
-fn queueLen(queue) {
+pub fn queueLen(queue) {
     return queue.len()
 }
 
-fn queueIsEmpty(queue) {
+pub fn queueIsEmpty(queue) {
     if (queue.len() == 0) { return 1 }
     return 0
 }
 
-fn queueClear(queue) {
+pub fn queueClear(queue) {
     while (queue.len() > 0) {
         pop(queue)
     }
@@ -192,11 +192,11 @@ fn queueClear(queue) {
 
 // ─── HashMap (flat key/value pairs in a single array) ────────────────
 
-fn newHashMap() {
+pub fn newHashMap() {
     return []
 }
 
-fn mapPut(map, key, value) {
+pub fn mapPut(map, key, value) {
     let i = 0
     while (i < map.len()) {
         if (map[i] == key) {
@@ -210,7 +210,7 @@ fn mapPut(map, key, value) {
     return value
 }
 
-fn mapGet(map, key) {
+pub fn mapGet(map, key) {
     let i = 0
     while (i < map.len()) {
         if (map[i] == key) { return map[i + 1] }
@@ -219,7 +219,7 @@ fn mapGet(map, key) {
     return 0
 }
 
-fn mapGetOr(map, key, default) {
+pub fn mapGetOr(map, key, default) {
     let i = 0
     while (i < map.len()) {
         if (map[i] == key) { return map[i + 1] }
@@ -228,7 +228,7 @@ fn mapGetOr(map, key, default) {
     return default
 }
 
-fn mapHas(map, key) {
+pub fn mapHas(map, key) {
     let i = 0
     while (i < map.len()) {
         if (map[i] == key) { return 1 }
@@ -237,7 +237,7 @@ fn mapHas(map, key) {
     return 0
 }
 
-fn mapRemove(map, key) {
+pub fn mapRemove(map, key) {
     let i = 0
     while (i < map.len()) {
         if (map[i] == key) {
@@ -256,11 +256,11 @@ fn mapRemove(map, key) {
     return 0
 }
 
-fn mapLen(map) {
+pub fn mapLen(map) {
     return map.len() / 2
 }
 
-fn mapKeys(map) {
+pub fn mapKeys(map) {
     let keys = []
     let i = 0
     while (i < map.len()) {
@@ -270,7 +270,7 @@ fn mapKeys(map) {
     return keys
 }
 
-fn mapValues(map) {
+pub fn mapValues(map) {
     let values = []
     let i = 1
     while (i < map.len()) {
@@ -280,7 +280,7 @@ fn mapValues(map) {
     return values
 }
 
-fn mapClear(map) {
+pub fn mapClear(map) {
     while (map.len() > 0) {
         pop(map)
     }
@@ -289,18 +289,18 @@ fn mapClear(map) {
 
 // ─── HashSet (no duplicates) ─────────────────────────────────────────
 
-fn newHashSet() {
+pub fn newHashSet() {
     return []
 }
 
-fn setAdd(setArr, value) {
+pub fn setAdd(setArr, value) {
     if (setHas(setArr, value) == 0) {
         push(setArr, value)
     }
     return setArr.len()
 }
 
-fn setHas(setArr, value) {
+pub fn setHas(setArr, value) {
     let i = 0
     while (i < setArr.len()) {
         if (setArr[i] == value) { return 1 }
@@ -309,11 +309,11 @@ fn setHas(setArr, value) {
     return 0
 }
 
-fn setContains(setArr, value) {
+pub fn setContains(setArr, value) {
     return setHas(setArr, value)
 }
 
-fn setRemove(setArr, value) {
+pub fn setRemove(setArr, value) {
     let i = 0
     while (i < setArr.len()) {
         if (setArr[i] == value) {
@@ -331,23 +331,23 @@ fn setRemove(setArr, value) {
     return 0
 }
 
-fn setLen(setArr) {
+pub fn setLen(setArr) {
     return setArr.len()
 }
 
-fn setIsEmpty(setArr) {
+pub fn setIsEmpty(setArr) {
     if (setArr.len() == 0) { return 1 }
     return 0
 }
 
-fn setClear(setArr) {
+pub fn setClear(setArr) {
     while (setArr.len() > 0) {
         pop(setArr)
     }
     return 0
 }
 
-fn setToArray(setArr) {
+pub fn setToArray(setArr) {
     return setArr
 }
 
@@ -364,24 +364,24 @@ fn setToArray(setArr) {
 // `array<T>`; bare `array` still works everywhere (deprecated warning).
 
 // Typed List<T>.
-fn typedListNew<T>() -> array<T> {
+pub fn typedListNew<T>() -> array<T> {
     return []
 }
 
-fn typedListPush<T>(xs: array<T>, value: T) -> int {
+pub fn typedListPush<T>(xs: array<T>, value: T) -> int {
     push(xs, value)
     return xs.len()
 }
 
-fn typedListPop<T>(xs: array<T>) -> T {
+pub fn typedListPop<T>(xs: array<T>) -> T {
     return pop(xs)
 }
 
-fn typedListGet<T>(xs: array<T>, i: int) -> T {
+pub fn typedListGet<T>(xs: array<T>, i: int) -> T {
     return xs[i]
 }
 
-fn typedListLen<T>(xs: array<T>) -> int {
+pub fn typedListLen<T>(xs: array<T>) -> int {
     return xs.len()
 }
 
@@ -390,11 +390,11 @@ fn typedListLen<T>(xs: array<T>) -> int {
 // compile-time constrained.
 struct TypedEntry<K, V> { key: K, value: V }
 
-fn typedMapNew<K, V>() -> array<TypedEntry<K,V>> {
+pub fn typedMapNew<K, V>() -> array<TypedEntry<K,V>> {
     return []
 }
 
-fn typedMapHas<K, V>(m: array<TypedEntry<K,V>>, key: K) -> bool {
+pub fn typedMapHas<K, V>(m: array<TypedEntry<K,V>>, key: K) -> bool {
     let i = 0
     while (i < m.len()) {
         if (m[i].key == key) { return true }
@@ -403,7 +403,7 @@ fn typedMapHas<K, V>(m: array<TypedEntry<K,V>>, key: K) -> bool {
     return false
 }
 
-fn typedMapGetOr<K, V>(m: array<TypedEntry<K,V>>, key: K, fallback: V) -> V {
+pub fn typedMapGetOr<K, V>(m: array<TypedEntry<K,V>>, key: K, fallback: V) -> V {
     let i = 0
     while (i < m.len()) {
         if (m[i].key == key) { return m[i].value }
@@ -412,16 +412,16 @@ fn typedMapGetOr<K, V>(m: array<TypedEntry<K,V>>, key: K, fallback: V) -> V {
     return fallback
 }
 
-fn typedMapLen<K, V>(m: array<TypedEntry<K,V>>) -> int {
+pub fn typedMapLen<K, V>(m: array<TypedEntry<K,V>>) -> int {
     return m.len()
 }
 
 // Typed Set<T> (no duplicates enforced via equality).
-fn typedSetNew<T>() -> array<T> {
+pub fn typedSetNew<T>() -> array<T> {
     return []
 }
 
-fn typedSetAdd<T: Eq>(s: array<T>, value: T) -> bool {
+pub fn typedSetAdd<T: Eq>(s: array<T>, value: T) -> bool {
     let i = 0
     while (i < s.len()) {
         if (s[i] == value) { return false }
@@ -431,7 +431,7 @@ fn typedSetAdd<T: Eq>(s: array<T>, value: T) -> bool {
     return true
 }
 
-fn typedSetHas<T: Eq>(s: array<T>, value: T) -> bool {
+pub fn typedSetHas<T: Eq>(s: array<T>, value: T) -> bool {
     let i = 0
     while (i < s.len()) {
         if (s[i] == value) { return true }
@@ -440,7 +440,7 @@ fn typedSetHas<T: Eq>(s: array<T>, value: T) -> bool {
     return false
 }
 
-fn typedSetLen<T>(s: array<T>) -> int {
+pub fn typedSetLen<T>(s: array<T>) -> int {
     return s.len()
 }
 
@@ -462,38 +462,38 @@ fn typedSetLen<T>(s: array<T>) -> int {
 // tagged-enum RFC lands, Some(x)/Ok(v) pattern syntax will layer onto
 // these same function names.
 
-fn optionSome<T>(value: T) -> array {
+pub fn optionSome<T>(value: T) -> array {
     return [1, value];
 }
 
-fn optionNone<T>() -> array {
+pub fn optionNone<T>() -> array {
     return [0, 0];
 }
 
-fn optionIsSome<T>(opt: array) -> bool {
+pub fn optionIsSome<T>(opt: array) -> bool {
     if (opt.len() == 2 && opt[0] == 1) { return true; }
     return false;
 }
 
-fn optionUnwrapOr<T>(opt: array, fallback: T) -> T {
+pub fn optionUnwrapOr<T>(opt: array, fallback: T) -> T {
     if (opt.len() == 2 && opt[0] == 1) { return opt[1]; }
     return fallback;
 }
 
-fn resultOk<T, E>(value: T) -> array {
+pub fn resultOk<T, E>(value: T) -> array {
     return [1, value, 0];
 }
 
-fn resultErr<T, E>(error: E) -> array {
+pub fn resultErr<T, E>(error: E) -> array {
     return [0, 0, error];
 }
 
-fn resultIsOk<T, E>(res: array) -> bool {
+pub fn resultIsOk<T, E>(res: array) -> bool {
     if (res.len() == 3 && res[0] == 1) { return true; }
     return false;
 }
 
-fn resultUnwrapOr<T, E>(res: array, fallback: T) -> T {
+pub fn resultUnwrapOr<T, E>(res: array, fallback: T) -> T {
     if (res.len() == 3 && res[0] == 1) { return res[1]; }
     return fallback;
 }

@@ -1,0 +1,1 @@
+type annotation 'Option<int>' does not match enum 'Result' value

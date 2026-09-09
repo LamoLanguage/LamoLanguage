@@ -27,6 +27,10 @@ typedef enum {
     TOKEN_LPAREN, TOKEN_RPAREN, TOKEN_LBRACE, TOKEN_RBRACE,
     TOKEN_LBRACKET, TOKEN_RBRACKET,
     TOKEN_COMMA, TOKEN_SEMICOLON, TOKEN_COLON, TOKEN_DOT,
+    /* 2.7.0 (FU4): `::` variant qualification — `Enum::Variant`.
+     * Lexed as ONE token so the parser can distinguish qualified
+     * variant references from two unrelated colons (SPEC §3.5). */
+    TOKEN_COLON_COLON,
 
     // System
     TOKEN_EOF, TOKEN_UNKNOWN

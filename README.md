@@ -164,16 +164,20 @@ Runnable programs live in [`examples/`](examples/) and [`std/examples/`](std/exa
 
 ## Project Status
 
-The current implementation (v2.6.0) includes:
+The current implementation (v2.7.0) includes:
 
 - ✅ Lexer, parser, AST
 - ✅ Semantic analyzer (scopes, types, generics binding, constraints)
 - ✅ C backend with embedded runtime
 - ✅ Structs, methods, arrays, enums, match
 - ✅ Generics (PRs 1–6): generic functions/structs/impls, `array<T>`, constraints
-- ✅ Tagged-union enums — payload variants, `Some(x) =>` match bindings
+- ✅ Tagged-union enums — payload variants, `Some(x) =>` match bindings,
+  nested destructuring (`Some(Pair(a, b))`), `when` guards,
+  `Enum::Variant` qualification, and enum type annotations
+  (`let o: Option<int>`)
 - ✅ Modules & namespaced imports — struct-typed returns across boundaries,
-  explicit `pub` export markers, folder-based modules, module loading in eval/REPL
+  enforced `pub` visibility (non-`pub` via alias is an error), folder-based
+  modules, module loading in eval/REPL
 - ✅ Package manager (`lampm` integrated into the `lamo` binary)
 - ✅ REPL and eval
 - ✅ Formatter
@@ -191,6 +195,9 @@ Next up (see [`roadmap.md`](roadmap.md) and [`todo.md`](todo.md) for the full pi
 - [x] Boolean print form (`print(true)` renders `true` — decided + specced in SPEC §8.1)
 - [x] Module rules: `pub` export markers, folder modules, duplicate-import
       decisions, entry-file `main()` semantics, eval/REPL module loading
+- [x] 2.6.0 follow-ups: enum type annotations, nested match patterns +
+      `when` guards, `Enum::Variant` qualification, `pub` step 2 enforcement,
+      Windows eval-suite parity in `run_tests.ps1`
 - [ ] Traits
 - [ ] Better formatter (AST-based pretty-printer)
 - [ ] Language Server (LSP)

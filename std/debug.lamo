@@ -16,32 +16,32 @@
 //   debug.timeEnd("myloop")
 
 // log(message) — print a debug message to stderr with a "debug: " prefix.
-fn log(message) {
+pub fn log(message) {
     __lamo_std_io_eprint("debug: " + message)
     return 0
 }
 
 // dump(value) — print a value to stderr for inspection.
-fn dump(value) {
+pub fn dump(value) {
     __lamo_std_io_eprint("dump: ")
     __lamo_std_io_eprint(value + "")
     return 0
 }
 
 // Internal timer table (two parallel arrays: labels and start times).
-let _timer_labels = []
-let _timer_starts = []
+pub let _timer_labels = []
+pub let _timer_starts = []
 
 // time(label) — start a named timer. Use timeEnd(label) to stop and
 // print the elapsed milliseconds.
-fn time(label) {
+pub fn time(label) {
     push(_timer_labels, label)
     push(_timer_starts, __lamo_std_time_monotonic())
     return 0
 }
 
 // timeEnd(label) — stop a named timer and print the elapsed time.
-fn timeEnd(label) {
+pub fn timeEnd(label) {
     let i = 0
     while (i < _timer_labels.len()) {
         if (_timer_labels[i] == label) {
@@ -67,7 +67,7 @@ fn timeEnd(label) {
 
 // trace(message) — print a stack-trace-style line: filename:line is not
 // available in pure Lamo, so we just prefix with "trace: " for now.
-fn trace(message) {
+pub fn trace(message) {
     __lamo_std_io_eprint("trace: " + message)
     return 0
 }
@@ -75,7 +75,7 @@ fn trace(message) {
 // assert(condition, message) — like testing.assert, but with a message
 // and immediate exit on failure. Useful for invariant checks in
 // non-test code.
-fn assert(condition, message) {
+pub fn assert(condition, message) {
     if (condition) { return 0 }
     __lamo_std_io_eprint("assertion failed: " + message)
     __lamo_std_process_exit(1)

@@ -459,56 +459,84 @@ ASTNode* ast_new_enum_decl(char* name, char** variants, int variant_count, int l
                                   NULL, NULL, NULL, NULL, 0, line, column);
 }
 
-/* 2.6.0 shared body of the match constructors. pattern_bindings entries
- * are strdup'd; pattern_bindings[a] == NULL means "arm without parens". */
-static ASTNode* ast_new_match_stmt_impl(ASTNode* scrutinee, char** patterns, int* pattern_is_wildcard,
-                                        char*** pattern_bindings, int* pattern_binding_counts,
-                                        ASTNode** bodies, int arm_count, int line, int column) {
+/* 2.7.0 (FU2): pattern-tree constructors + deep free. Wildcard nodes
+ * keep name = "_" (owned) so debug printing stays uniform. */
+static LamoPattern* ast_pattern_new(int kind, const char* name,
+                                    LamoPattern** children, int child_count,
+                                    int line, int column) {
+    LamoPattern* pat = (LamoPattern*)malloc(sizeof(LamoPattern));
+    if (!pat) {
+        perror("Failed to allocate LamoPattern");
+        exit(EXIT_FAILURE);
+    }
+    pat->kind = kind;
+    pat->name = name ? strdup(name) : NULL;
+    pat->children = children;
+    pat->child_count = children ? child_count : 0;
+    pat->line = line;
+    pat->column = column;
+    pat->sema_enum_name = NULL;
+    pat->sema_variant_index = -1;
+    return pat;
+}
+
+LamoPattern* ast_pattern_wildcard(int line, int column) {
+    return ast_pattern_new(LAMO_PATTERN_WILDCARD, "_", NULL, 0, line, column);
+}
+
+LamoPattern* ast_pattern_binding(const char* name, int line, int column) {
+    return ast_pattern_new(LAMO_PATTERN_BINDING, name, NULL, 0, line, column);
+}
+
+LamoPattern* ast_pattern_ctor(const char* name, LamoPattern** children, int child_count,
+                              int line, int column) {
+    return ast_pattern_new(LAMO_PATTERN_CTOR, name, children, child_count, line, column);
+}
+
+void ast_pattern_free(LamoPattern* pat) {
+    if (!pat) return;
+    free(pat->name);
+    for (int i = 0; i < pat->child_count; i++) {
+        ast_pattern_free(pat->children[i]);
+    }
+    free(pat->children);
+    free(pat);
+}
+
+/* 2.7.0 (FU2): shared body of the match constructor. Takes ownership
+ * of every pattern tree, guard node and body node. */
+static ASTNode* ast_new_match_stmt_impl(ASTNode* scrutinee, LamoPattern** patterns,
+                                        ASTNode** guards, ASTNode** bodies,
+                                        int arm_count, int line, int column) {
     ASTMatchStmt* node = (ASTMatchStmt*)ast_new_node(AST_MATCH_STMT, sizeof(ASTMatchStmt), line, column);
     int i;
     node->scrutinee = scrutinee;
     node->arm_count = arm_count;
-    node->patterns = arm_count > 0 ? malloc(sizeof(char*) * (size_t)arm_count) : NULL;
-    node->pattern_is_wildcard = arm_count > 0 ? malloc(sizeof(int) * (size_t)arm_count) : NULL;
+    node->patterns = arm_count > 0 ? malloc(sizeof(LamoPattern*) * (size_t)arm_count) : NULL;
+    node->guards = arm_count > 0 ? malloc(sizeof(ASTNode*) * (size_t)arm_count) : NULL;
     node->bodies = arm_count > 0 ? malloc(sizeof(ASTNode*) * (size_t)arm_count) : NULL;
-    if (arm_count > 0 && pattern_bindings && pattern_binding_counts) {
-        node->pattern_bindings = malloc(sizeof(char**) * (size_t)arm_count);
-        node->pattern_binding_counts = malloc(sizeof(int) * (size_t)arm_count);
-    }
     for (i = 0; i < arm_count; i++) {
-        node->patterns[i] = strdup(patterns[i] ? patterns[i] : "_");
-        node->pattern_is_wildcard[i] = pattern_is_wildcard ? pattern_is_wildcard[i] : 0;
-        node->bodies[i] = bodies[i];
-        if (node->pattern_bindings) {
-            int bc = pattern_binding_counts[i];
-            int j;
-            if (bc > 0 && pattern_bindings[i]) {
-                node->pattern_bindings[i] = malloc(sizeof(char*) * (size_t)bc);
-                node->pattern_binding_counts[i] = bc;
-                for (j = 0; j < bc; j++) {
-                    node->pattern_bindings[i][j] = pattern_bindings[i][j]
-                        ? strdup(pattern_bindings[i][j]) : NULL;
-                }
-            } else {
-                node->pattern_bindings[i] = NULL;
-                node->pattern_binding_counts[i] = 0;
-            }
-        }
+        node->patterns[i] = patterns ? patterns[i] : NULL;
+        node->guards[i] = guards ? guards[i] : NULL;
+        node->bodies[i] = bodies ? bodies[i] : NULL;
     }
     return (ASTNode*)node;
 }
 
-ASTNode* ast_new_match_stmt_full(ASTNode* scrutinee, char** patterns, int* pattern_is_wildcard,
-                                 char*** pattern_bindings, int* pattern_binding_counts,
-                                 ASTNode** bodies, int arm_count, int line, int column) {
-    return ast_new_match_stmt_impl(scrutinee, patterns, pattern_is_wildcard,
-                                   pattern_bindings, pattern_binding_counts,
-                                   bodies, arm_count, line, column);
+ASTNode* ast_new_match_stmt_full(ASTNode* scrutinee, LamoPattern** patterns,
+                                 ASTNode** guards, ASTNode** bodies,
+                                 int arm_count, int line, int column) {
+    return ast_new_match_stmt_impl(scrutinee, patterns, guards, bodies,
+                                   arm_count, line, column);
 }
 
-ASTNode* ast_new_match_stmt(ASTNode* scrutinee, char** patterns, int* pattern_is_wildcard, ASTNode** bodies, int arm_count, int line, int column) {
-    return ast_new_match_stmt_impl(scrutinee, patterns, pattern_is_wildcard,
-                                   NULL, NULL, bodies, arm_count, line, column);
+/* 2.7.0 (FU4): qualified variant value — `Enum::Variant`. */
+ASTNode* ast_new_variant_ref(const char* enum_name, const char* variant_name,
+                             int line, int column) {
+    ASTVariantRef* node = (ASTVariantRef*)ast_new_node(AST_VARIANT_REF, sizeof(ASTVariantRef), line, column);
+    node->enum_name = enum_name ? strdup(enum_name) : NULL;
+    node->variant_name = variant_name ? strdup(variant_name) : NULL;
+    return (ASTNode*)node;
 }
 
 ASTNode* ast_new_struct_literal(char* struct_name, char** field_names, ASTNode** field_values, int field_count, char** type_args, int type_arg_count, int line, int column) {
@@ -790,23 +818,21 @@ void ast_free(ASTNode* node) {
                 int i;
                 ast_free(ms->scrutinee);
                 for (i = 0; i < ms->arm_count; i++) {
-                    free(ms->patterns[i]);
+                    /* 2.7.0 (FU2): pattern trees + optional guards. */
+                    ast_pattern_free(ms->patterns[i]);
+                    if (ms->guards && ms->guards[i]) ast_free(ms->guards[i]);
                     ast_free(ms->bodies[i]);
-                    /* 2.6.0: free per-arm binding lists. */
-                    if (ms->pattern_bindings && ms->pattern_bindings[i]) {
-                        int j;
-                        int bc = ms->pattern_binding_counts ? ms->pattern_binding_counts[i] : 0;
-                        for (j = 0; j < bc; j++) {
-                            free(ms->pattern_bindings[i][j]);
-                        }
-                        free(ms->pattern_bindings[i]);
-                    }
                 }
                 free(ms->patterns);
-                free(ms->pattern_is_wildcard);
+                free(ms->guards);
                 free(ms->bodies);
-                if (ms->pattern_bindings) free(ms->pattern_bindings);
-                if (ms->pattern_binding_counts) free(ms->pattern_binding_counts);
+                break;
+            }
+            case AST_VARIANT_REF: {
+                /* 2.7.0 (FU4): qualified variant value. */
+                ASTVariantRef* vr = (ASTVariantRef*)node;
+                free(vr->enum_name);
+                free(vr->variant_name);
                 break;
             }
             case AST_STRUCT_LITERAL: {
