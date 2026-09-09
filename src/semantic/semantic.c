@@ -161,10 +161,15 @@ typedef struct {
      *   match-arm patterns and to register variant names as int constants.
      *
      * impl_defs: linked list of all AST_IMPL_DECL nodes. Used to look up
-     *   methods by struct name + method name. */
+     *   methods by struct name + method name.
+     *
+     * trait_defs: 2.9.0 — walks the SAME declaration list, filtering
+     *   AST_TRAIT_DECL nodes. Backs find_trait_def (constraint
+     *   validation + impl completeness checks). */
     ASTNode* struct_defs;
     ASTNode* enum_defs;
     ASTNode* impl_defs;
+    ASTNode* trait_defs;
     /* Phase 2: when visiting an impl block, this is set to the struct
      * name so that `self` references inside method bodies can be
      * resolved. NULL outside of impl method bodies. */
@@ -195,6 +200,18 @@ static LamoType semantic_validate_match(SemanticContext* ctx, ASTMatchStmt* ms,
  * semantic.h, so the types are complete here). */
 static ASTStructDecl* find_struct_def(SemanticContext* ctx, const char* name);
 static void semantic_error_at(SemanticContext* ctx, int line, int column, const char* message);
+/* 2.9.0 traits: trait registry lookups + static trait-constraint
+ * satisfaction. Defined near the other registry helpers; forward-declared
+ * here because the constraint-catalogue block below runs earlier in this
+ * file. */
+static ASTTraitDecl* find_trait_def(SemanticContext* ctx, const char* name);
+static ASTImplDecl* find_trait_impl_before(SemanticContext* ctx, const char* trait_name,
+                                           const char* struct_name, const ASTNode* before);
+static int lamo_type_satisfies_trait(SemanticContext* ctx, const char* normalized,
+                                     const char* trait_name);
+/* 2.9.0: find_enum_def is defined further down (with the other registry
+ * helpers) but the trait-satisfaction helper above already calls it. */
+static ASTEnumDecl* find_enum_def(SemanticContext* ctx, const char* name);
 /* Generics PR 2/3: annotation resolvers — defined after the machinery
  * block that uses them; declared here. */
 static LamoType annotation_to_type_with_ctx(SemanticContext* ctx, const char* annotation);
@@ -510,6 +527,26 @@ static int lamo_type_satisfies_constraint(SemanticContext* ctx, const char* norm
         default:
             return 0;
     }
+}
+
+/* 2.9.0 traits: STATIC satisfaction of a user-declared trait constraint.
+ * A concrete type satisfies trait `T` when the type is a declared struct
+ * AND an `impl T for <struct>` exists (find_trait_impl). Builtins, arrays
+ * and enums never satisfy user traits in 2.9.0 — impl blocks are
+ * struct-only (documented limitation; the built-in catalogue covers
+ * builtins). An UNKNOWN head defers (return 1) so error cascades don't
+ * multiply — unknown-constraint names are reported at declaration. */
+static int lamo_type_satisfies_trait(SemanticContext* ctx, const char* normalized,
+                                     const char* trait_name) {
+    if (!normalized || !trait_name) return 0;
+    char head[64];
+    ann_head(normalized, head, sizeof(head));
+    if (strcmp(head, "") == 0) return 1;              /* unknown: defer */
+    if (is_builtin_type_head(head)) return 0;         /* builtins: catalogue only */
+    if (strcmp(head, "array") == 0) return 0;         /* arrays: no impls */
+    if (find_enum_def(ctx, head)) return 0;           /* enums: no impls */
+    if (!find_struct_def(ctx, head)) return 0;        /* not a declared struct */
+    return find_trait_impl_before(ctx, trait_name, head, NULL) != NULL;
 }
 
 static int is_numeric_type(LamoType type) {
@@ -874,6 +911,48 @@ static ASTImplDecl* find_impl_decl(SemanticContext* ctx, const char* struct_name
     return NULL;
 }
 
+/* ── 2.9.0 traits: registry helpers ────────────────────────────────── */
+
+/* Find a trait declaration by name. Walks the same top-level list as
+ * find_struct_def / find_impl_decl, filtering AST_TRAIT_DECL nodes, so
+ * traits are order-independent (a trait declared after its use site
+ * still resolves — same hoisting semantics as structs). */
+static ASTTraitDecl* find_trait_def(SemanticContext* ctx, const char* name) {
+    ASTNode* cur;
+    if (!name) return NULL;
+    for (cur = ctx->trait_defs; cur; cur = cur->next) {
+        if (cur->type == AST_TRAIT_DECL) {
+            ASTTraitDecl* td = (ASTTraitDecl*)cur;
+            if (td->name && strcmp(td->name, name) == 0) return td;
+        }
+    }
+    return NULL;
+}
+
+/* Find an EXISTING trait impl — `impl <trait_name> for <struct_name>` —
+ * walking only nodes BEFORE `before` in the declaration list. The
+ * before-bound makes the duplicate-impl check in the visit pass safe:
+ * when validating the impl node itself, earlier impls are the only ones
+ * that can conflict. Pass before = NULL to scan the whole list (used by
+ * constraint satisfaction, which must see every impl regardless of
+ * position). */
+static ASTImplDecl* find_trait_impl_before(SemanticContext* ctx, const char* trait_name,
+                                           const char* struct_name, const ASTNode* before) {
+    ASTNode* cur;
+    if (!trait_name || !struct_name) return NULL;
+    for (cur = ctx->impl_defs; cur && cur != before; cur = cur->next) {
+        if (cur->type == AST_IMPL_DECL) {
+            ASTImplDecl* id = (ASTImplDecl*)cur;
+            if (id->trait_name && id->struct_name &&
+                strcmp(id->trait_name, trait_name) == 0 &&
+                strcmp(id->struct_name, struct_name) == 0) {
+                return id;
+            }
+        }
+    }
+    return NULL;
+}
+
 /* Generics PR 2: recursive annotation-tree validator for struct field
  * types. Every leaf identifier must be a builtin, a declared struct or
  * one of `sd`'s own type parameters; nesting is walked recursively.
@@ -1185,6 +1264,38 @@ static const char* arg_concrete_full_type(SemanticContext* ctx, ASTNode* node) {
         case AST_GROUPING_EXPR: {
             ASTGroupingExpr* gr = (ASTGroupingExpr*)node;
             return arg_concrete_full_type(ctx, gr->expression);
+        }
+        case AST_STRUCT_LITERAL: {
+            /* 2.9.0: a struct literal argument carries its struct's full
+             * type — bare name ("Plain") or instantiation ("Stack<int>")
+             * when explicit type args are present. Before this case the
+             * literal had no concrete type yet at signature-check time,
+             * so §7.7 binding AND constraint enforcement (catalogue and
+             * traits alike) silently skipped those call sites. */
+            ASTStructLiteral* sl = (ASTStructLiteral*)node;
+            if (sl->type_arg_count > 0 && sl->type_args) {
+                char buf[224];
+                size_t blen = 0;
+                int w = snprintf(buf, sizeof(buf), "%s<", sl->struct_name ? sl->struct_name : "");
+                if (w < 0 || (size_t)w >= sizeof(buf)) return lamo_intern_type(sl->struct_name ? sl->struct_name : "");
+                blen = (size_t)w;
+                for (int i = 0; i < sl->type_arg_count && blen < sizeof(buf) - 1; i++) {
+                    char* norm = sl->type_args[i] ? semantic_normalize_type(sl->type_args[i]) : NULL;
+                    if (i > 0 && blen < sizeof(buf) - 1) buf[blen++] = ',';
+                    if (norm) {
+                        size_t nlen = strlen(norm);
+                        size_t room = sizeof(buf) - 1 - blen;
+                        size_t take = nlen < room ? nlen : room;
+                        memcpy(buf + blen, norm, take);
+                        blen += take;
+                        free(norm);
+                    }
+                }
+                if (blen < sizeof(buf) - 1) buf[blen++] = '>';
+                buf[blen] = '\0';
+                return lamo_intern_type(buf);
+            }
+            return lamo_intern_type(sl->struct_name ? sl->struct_name : "");
         }
         default:
             return node->sema_full_type;  /* set by earlier rounds */
@@ -1728,25 +1839,51 @@ static LamoType semantic_visit_call_full(SemanticContext* ctx, const char* name,
                 /* Generic-but-unbound here: leave for the map pass below. */
             }
 
-            /* Constraint enforcement (PR 6 §6): each BOUND parameter must
-             * satisfy its catalogue constraint; still-unbound parameters
-             * cannot be checked (already reported above only when needed). */
+            /* Constraint enforcement (PR 6 §6 + 2.9.0 traits): each BOUND
+             * parameter must satisfy its constraint — catalogue kinds via
+             * the built-in rules, user-declared traits via impl lookup
+             * (lamo_type_satisfies_trait). Still-unbound parameters
+             * cannot be checked here. */
             if (generic_fn) {
                 for (int t = 0; t < symbol->tp_count; t++) {
                     const char* val = map.values[t];
                     const char* con = symbol->tp_constraints[t];
+                    if (!val || !con) continue;
                     int ckind = lamo_constraint_kind(con);
-                    if (!val || ckind <= 0) continue;   /* Any/-1 skip */
-                    if (!lamo_type_satisfies_constraint(ctx, val, ckind)) {
-                        char message[300];
-                        snprintf(message, sizeof(message),
-                                 "type argument '%s' for parameter '%s' does not satisfy constraint '%s' (%s)",
-                                 val, symbol->tp_names[t], lamo_constraint_name(ckind),
-                                 ckind == LAMO_CON_NUM ? "requires int or float"
-                                 : ckind == LAMO_CON_SHOW ? "requires a printable builtin or declared struct"
-                                 : "requires a builtin with the required operations");
-                        semantic_error_at(ctx, line, column, message);
+                    if (ckind == LAMO_CON_ANY) continue;   /* unconstrained */
+                    if (ckind > 0) {
+                        if (!lamo_type_satisfies_constraint(ctx, val, ckind)) {
+                            char message[300];
+                            snprintf(message, sizeof(message),
+                                     "type argument '%s' for parameter '%s' does not satisfy constraint '%s' (%s)",
+                                     val, symbol->tp_names[t], lamo_constraint_name(ckind),
+                                     ckind == LAMO_CON_NUM ? "requires int or float"
+                                     : ckind == LAMO_CON_SHOW ? "requires a printable builtin or declared struct"
+                                     : "requires a builtin with the required operations");
+                            semantic_error_at(ctx, line, column, message);
+                        }
+                    } else if (find_trait_def(ctx, con)) {
+                        if (!lamo_type_satisfies_trait(ctx, val, con)) {
+                            char message[400];
+                            char hint[260];
+                            char val_head[64];
+                            ann_head(val, val_head, sizeof(val_head));
+                            snprintf(message, sizeof(message),
+                                     "type argument '%s' for parameter '%s' does not satisfy trait '%s'",
+                                     val, symbol->tp_names[t], con);
+                            if (is_builtin_type_head(val_head) || strcmp(val_head, "array") == 0) {
+                                snprintf(hint, sizeof(hint),
+                                         "user traits are implemented by structs only — builtins satisfy just the built-in catalogue (Any, Eq, Ord, Num, Hash, Show)");
+                            } else {
+                                snprintf(hint, sizeof(hint),
+                                         "write `impl %s for %s { ... }` (a trait is satisfied by a struct with a trait impl)",
+                                         con, val);
+                            }
+                            semantic_error_at_hint(ctx, line, column, message, hint);
+                        }
                     }
+                    /* else: unknown constraint name — already reported at
+                     * the declaration site; don't double-report. */
                 }
             }
 
@@ -2502,6 +2639,21 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                 } else {
                     scope_define(ctx, ctx->current_scope, fn_decl->params[i], SYMBOL_VAR, 0, param_type, node->line, node->column, node->file_path);
                 }
+                /* 2.9.0 traits: attach the normalized annotation to the
+                 * param's symbol even when the head is one of the fn's
+                 * own type parameters ("T", "array<T>"). Method-call
+                 * resolution reads this to detect (and honestly reject)
+                 * method calls on type-parameter values — under the
+                 * erasure backend they previously fell into a silent
+                 * lamo_make_int(0) fallback. */
+                if (fn_decl->param_types && fn_decl->param_types[i]) {
+                    Symbol* p_sym = scope_find_in_current(ctx->current_scope, fn_decl->params[i]);
+                    if (p_sym && !p_sym->full_type) {
+                        char* p_norm = semantic_normalize_type(fn_decl->param_types[i]);
+                        p_sym->full_type = lamo_intern_type(p_norm);
+                        free(p_norm);
+                    }
+                }
             }
 
             /* Phase 2: if we're inside an impl block, define `self` as a
@@ -2829,10 +2981,10 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                 }
                 const char* con = sd->type_param_constraints
                                       ? sd->type_param_constraints[i] : NULL;
-                if (con && lamo_constraint_kind(con) < 0) {
-                    char message[256];
+                if (con && lamo_constraint_kind(con) < 0 && !find_trait_def(ctx, con)) {
+                    char message[320];
                     snprintf(message, sizeof(message),
-                             "unknown constraint '%s' on type parameter '%s' of struct '%s' (catalogue: Any, Eq, Ord, Num, Hash, Show)",
+                             "unknown constraint '%s' on type parameter '%s' of struct '%s' (catalogue: Any, Eq, Ord, Num, Hash, Show — or a declared trait)",
                              con, sd->type_params[i], sd->name);
                     semantic_error_at(ctx, node->line, node->column, message);
                 }
@@ -2851,16 +3003,173 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
             }
             break;
         }
+        case AST_TRAIT_DECL: {
+            /* 2.9.0 traits: a trait is a compile-time CONTRACT — no code
+             * is generated and no symbol is added to the variable
+             * namespace (trait names resolve through find_trait_def, not
+             * the scope chain). Validation here:
+             *   - duplicate method names within the trait are errors;
+             *   - every parameter / return annotation must resolve
+             *     (builtins, declared structs/enums — traits are
+             *     non-generic in 2.9.0, so type parameters are NOT
+             *     accepted; the parser already rejects `<T>` on the
+             *     signature itself). */
+            ASTTraitDecl* td = (ASTTraitDecl*)node;
+            for (ASTNode* m = td->methods; m; m = m->next) {
+                if (m->type != AST_FN_DECL) continue;
+                ASTFnDecl* sig = (ASTFnDecl*)m;
+                for (ASTNode* prev = td->methods; prev && prev != m; prev = prev->next) {
+                    if (prev->type == AST_FN_DECL &&
+                        strcmp(((ASTFnDecl*)prev)->name, sig->name) == 0) {
+                        char message[256];
+                        snprintf(message, sizeof(message),
+                                 "duplicate method '%s' in trait '%s'",
+                                 sig->name, td->name);
+                        semantic_error_at(ctx, m->line, m->column, message);
+                    }
+                }
+                for (int i = 0; i < sig->param_count; i++) {
+                    const char* raw = sig->param_types ? sig->param_types[i] : NULL;
+                    if (!raw) continue;
+                    const char* norm = NULL;
+                    LamoType k = annotation_resolve_full(ctx, raw, &norm);
+                    if (k == LAMO_TYPE_UNKNOWN) {
+                        char message[320];
+                        snprintf(message, sizeof(message),
+                                 "unknown type annotation '%s' on parameter '%s' of trait method '%s' (trait signatures use builtins and declared struct/enum names)",
+                                 raw, sig->params[i], sig->name);
+                        semantic_error_at(ctx, m->line, m->column, message);
+                    }
+                }
+                if (sig->return_type_annotation) {
+                    const char* norm = NULL;
+                    LamoType k = annotation_resolve_full(ctx, sig->return_type_annotation, &norm);
+                    if (k == LAMO_TYPE_UNKNOWN) {
+                        char message[320];
+                        snprintf(message, sizeof(message),
+                                 "unknown return type annotation '%s' on trait method '%s' (trait signatures use builtins and declared struct/enum names)",
+                                 sig->return_type_annotation, sig->name);
+                        semantic_error_at(ctx, m->line, m->column, message);
+                    }
+                }
+            }
+            break;
+        }
         case AST_IMPL_DECL: {
             ASTImplDecl* id = (ASTImplDecl*)node;
             /* Validate the struct exists. */
             if (!find_struct_def(ctx, id->struct_name)) {
                 char message[256];
-                snprintf(message, sizeof(message),
-                         "impl for unknown struct '%s' (declare it with `struct %s { ... }` first)",
-                         id->struct_name, id->struct_name);
+                if (id->trait_name) {
+                    /* 2.9.0: name the trait in the diagnostic so the
+                     * reader knows WHICH impl block is broken. */
+                    snprintf(message, sizeof(message),
+                             "impl %s for unknown struct '%s' (declare it with `struct %s { ... }` first)",
+                             id->trait_name, id->struct_name, id->struct_name);
+                } else {
+                    snprintf(message, sizeof(message),
+                             "impl for unknown struct '%s' (declare it with `struct %s { ... }` first)",
+                             id->struct_name, id->struct_name);
+                }
                 semantic_error_at(ctx, node->line, node->column, message);
                 break;
+            }
+            /* ── 2.9.0 traits: contract validation ─────────────────────
+             * For `impl Trait for Type` blocks we check, in order:
+             *   1. the trait is declared (find_trait_def);
+             *   2. no earlier impl of the SAME trait for the SAME struct
+             *      exists (one impl per pair — "coherence");
+             *   3. COMPLETENESS: every required method of the trait is
+             *      present among the struct's methods;
+             *   4. SIGNATURES: arity matches exactly; annotations are
+             *      compared (normalized) whenever BOTH sides annotate.
+             * A missing/unknown trait is reported but the block then
+             * falls through to the shared inherent-impl flow below, so
+             * its methods still resolve and errors don't cascade. */
+            if (id->trait_name) {
+                ASTTraitDecl* td = find_trait_def(ctx, id->trait_name);
+                if (!td) {
+                    char message[256];
+                    char hint[160];
+                    snprintf(message, sizeof(message),
+                             "impl for unknown trait '%s' (no `trait %s { ... }` declaration exists)",
+                             id->trait_name, id->trait_name);
+                    snprintf(hint, sizeof(hint),
+                             "declare the trait first, or drop `for %s` to write an inherent impl",
+                             id->struct_name);
+                    semantic_error_at_hint(ctx, node->line, node->column, message, hint);
+                } else {
+                    /* 2. Coherence: one impl per (trait, struct) pair. */
+                    if (find_trait_impl_before(ctx, id->trait_name, id->struct_name, node)) {
+                        char message[256];
+                        snprintf(message, sizeof(message),
+                                 "duplicate impl of trait '%s' for struct '%s' (a type may implement a trait only once)",
+                                 id->trait_name, id->struct_name);
+                        semantic_error_at(ctx, node->line, node->column, message);
+                    }
+                    /* 3 + 4. Completeness + signature compatibility. */
+                    for (ASTNode* sm = td->methods; sm; sm = sm->next) {
+                        if (sm->type != AST_FN_DECL) continue;
+                        ASTFnDecl* sig = (ASTFnDecl*)sm;
+                        ASTFnDecl* impl_fn = find_method(ctx, id->struct_name, sig->name);
+                        if (!impl_fn) {
+                            char message[320];
+                            char hint[160];
+                            snprintf(message, sizeof(message),
+                                     "impl of trait '%s' for struct '%s' is missing required method '%s'",
+                                     id->trait_name, id->struct_name, sig->name);
+                            snprintf(hint, sizeof(hint),
+                                     "add `fn %s(...) { ... }` to this impl block",
+                                     sig->name);
+                            semantic_error_at_hint(ctx, node->line, node->column, message, hint);
+                            continue;
+                        }
+                        if (sig->param_count != impl_fn->param_count) {
+                            char message[320];
+                            snprintf(message, sizeof(message),
+                                     "method '%s' of impl %s for %s takes %d parameter(s) but the trait declares %d",
+                                     sig->name, id->trait_name, id->struct_name,
+                                     impl_fn->param_count, sig->param_count);
+                            semantic_error_at(ctx, node->line, node->column, message);
+                            continue;
+                        }
+                        /* Per-parameter annotations: compare only when
+                         * both sides annotate (Lamo keeps annotations
+                         * optional; a missing annotation can't conflict). */
+                        for (int pi = 0; pi < sig->param_count; pi++) {
+                            const char* sig_ann = sig->param_types ? sig->param_types[pi] : NULL;
+                            const char* imp_ann = impl_fn->param_types ? impl_fn->param_types[pi] : NULL;
+                            if (!sig_ann || !imp_ann) continue;
+                            char* sig_norm = semantic_normalize_type(sig_ann);
+                            char* imp_norm = semantic_normalize_type(imp_ann);
+                            if (strcmp(sig_norm, imp_norm) != 0) {
+                                char message[400];
+                                snprintf(message, sizeof(message),
+                                         "parameter %d of '%s' in impl %s for %s has type '%s' but the trait declares '%s'",
+                                         pi + 1, sig->name, id->trait_name, id->struct_name,
+                                         imp_norm, sig_norm);
+                                semantic_error_at(ctx, node->line, node->column, message);
+                            }
+                            free(sig_norm);
+                            free(imp_norm);
+                        }
+                        /* Return annotations: same both-sides rule. */
+                        if (sig->return_type_annotation && impl_fn->return_type_annotation) {
+                            char* sig_norm = semantic_normalize_type(sig->return_type_annotation);
+                            char* imp_norm = semantic_normalize_type(impl_fn->return_type_annotation);
+                            if (strcmp(sig_norm, imp_norm) != 0) {
+                                char message[400];
+                                snprintf(message, sizeof(message),
+                                         "method '%s' of impl %s for %s returns '%s' but the trait declares '%s'",
+                                         sig->name, id->trait_name, id->struct_name,
+                                         imp_norm, sig_norm);
+                                semantic_error_at(ctx, node->line, node->column, message);
+                            }
+                            free(sig_norm);
+                            free(imp_norm);
+                        }
+                    }
+                }
             }
             /* RFC §4.4: generic impl validation.
              *   - the echo `Stack<T>` must name exactly this impl's own
@@ -2963,10 +3272,10 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                 {
                     const char* con = ed->type_param_constraints
                                           ? ed->type_param_constraints[i] : NULL;
-                    if (con && lamo_constraint_kind(con) < 0) {
-                        char message[256];
+                    if (con && lamo_constraint_kind(con) < 0 && !find_trait_def(ctx, con)) {
+                        char message[320];
                         snprintf(message, sizeof(message),
-                                 "unknown constraint '%s' on type parameter '%s' of enum '%s' (catalogue: Any, Eq, Ord, Num, Hash, Show)",
+                                 "unknown constraint '%s' on type parameter '%s' of enum '%s' (catalogue: Any, Eq, Ord, Num, Hash, Show — or a declared trait)",
                                  con, ed->type_params[i], ed->name);
                         semantic_error_at(ctx, node->line, node->column, message);
                     }
@@ -3284,7 +3593,7 @@ static LamoType semantic_validate_match(SemanticContext* ctx, ASTMatchStmt* ms,
             case AST_FOR_STMT: case AST_RETURN_STMT: case AST_BREAK_STMT:
             case AST_CONTINUE_STMT: case AST_ASSIGN_STMT: case AST_CALL_STMT:
             case AST_IMPORT: case AST_PLACE_ASSIGN_STMT: case AST_IMPL_DECL:
-            case AST_STRUCT_DECL:
+            case AST_STRUCT_DECL: case AST_TRAIT_DECL:
                 continue;  /* statement body: no value contribution */
             default:
                 break;
@@ -3716,6 +4025,43 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
                     obj_type = LAMO_TYPE_STRUCT;
                 }
             }
+            /* 2.9.0 traits: honest diagnostics for method calls on
+             * TYPE-PARAMETER receivers (`s.name()` where `s: T` of the
+             * enclosing generic fn/impl). The erasure backend resolves
+             * method calls through the receiver's CONCRETE struct name;
+             * a bare type parameter has none (no monomorphization, no
+             * vtables — RFC §12.4 keeps dispatch static), so before this
+             * check such calls silently fell into the codegen's
+             * lamo_make_int(0) fallback. Trait constraints check CALL
+             * SITES; they do not enable dynamic dispatch. */
+            {
+                const char* recv_full = NULL;
+                if (mc->object->type == AST_IDENTIFIER) {
+                    Symbol* rsym = scope_find(ctx->current_scope, ((ASTIdentifier*)mc->object)->name);
+                    if (rsym && rsym->kind == SYMBOL_VAR) recv_full = rsym->full_type;
+                }
+                if (!recv_full) recv_full = mc->object->sema_full_type;
+                if (recv_full) {
+                    int recv_is_tp = 0;
+                    int scope_tp_count = ctx->cur_fn_tp_count + ctx->impl_tp_count;
+                    for (int t = 0; t < scope_tp_count; t++) {
+                        const char* tpn = t < ctx->cur_fn_tp_count
+                            ? ctx->cur_fn_tp_names[t]
+                            : ctx->impl_tp_names[t - ctx->cur_fn_tp_count];
+                        if (tpn && strcmp(recv_full, tpn) == 0) { recv_is_tp = 1; break; }
+                    }
+                    if (recv_is_tp) {
+                        char message[320];
+                        char hint[220];
+                        snprintf(message, sizeof(message),
+                                 "cannot call method '%s' on a type-parameter value ('%s' is a generic parameter here; generics are erased at compile time, so the method cannot be resolved statically)",
+                                 mc->member_name, recv_full);
+                        snprintf(hint, sizeof(hint),
+                                 "traits check call sites statically; call the method on a concrete struct value instead (dynamic dispatch is out of scope per RFC-generics \u00a712.4)");
+                        semantic_error_at_hint(ctx, node->line, node->column, message, hint);
+                    }
+                }
+            }
             if (obj_type == LAMO_TYPE_ARRAY || (obj_type == LAMO_TYPE_UNKNOWN && !obj_struct_name)) {
                 /* Array method call: .push, .pop, .len. */
                 if (strcmp(mc->member_name, "push") == 0) {
@@ -4135,6 +4481,7 @@ int semantic_analyze_full(ASTProgram* program, const char* file_path,
     ctx.struct_defs = program->declarations;
     ctx.enum_defs = program->declarations;
     ctx.impl_defs = program->declarations;
+    ctx.trait_defs = program->declarations;
     ctx.current_impl_struct = NULL;
     /* Generics PR 2: enclosing-impl type parameters (RFC §4.4). MUST be
      * initialized here — every annotated parameter reads this list, and
@@ -4254,10 +4601,10 @@ int semantic_analyze_full(ASTProgram* program, const char* file_path,
                 }
                 const char* con = fn_decl->type_param_constraints
                                       ? fn_decl->type_param_constraints[i] : NULL;
-                if (con && lamo_constraint_kind(con) < 0) {
-                    char message[256];
+                if (con && lamo_constraint_kind(con) < 0 && !find_trait_def(&ctx, con)) {
+                    char message[320];
                     snprintf(message, sizeof(message),
-                             "unknown constraint '%s' on type parameter '%s' of function '%s' (catalogue: Any, Eq, Ord, Num, Hash, Show)",
+                             "unknown constraint '%s' on type parameter '%s' of function '%s' (catalogue: Any, Eq, Ord, Num, Hash, Show — or a declared trait)",
                              con, fn_decl->type_params[i], fn_decl->name);
                     semantic_error_at(&ctx, node->line, node->column, message);
                 }

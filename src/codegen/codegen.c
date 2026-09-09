@@ -1317,7 +1317,7 @@ void generate_c_code(ASTNode* node, FILE* out) {
             fprintf(out, ";\n");
         } else if (current->type != AST_FN_DECL && current->type != AST_IMPORT &&
                    current->type != AST_STRUCT_DECL && current->type != AST_IMPL_DECL &&
-                   current->type != AST_ENUM_DECL) {
+                   current->type != AST_ENUM_DECL && current->type != AST_TRAIT_DECL) {
             generate_statement_code(current, out);
         }
         current = current->next;
@@ -1853,6 +1853,11 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
             /* No code to emit — struct types exist only at compile time.
              * The runtime representation is a LamoArray (one slot per
              * field), allocated by lamo_struct_alloc in AST_STRUCT_LITERAL. */
+            break;
+        case AST_TRAIT_DECL:
+            /* 2.9.0 traits: a trait is a compile-time contract only — no
+             * runtime artifact. Trait-impl methods emit through their
+             * AST_IMPL_DECL nodes in step 3 of generate_c_code. */
             break;
         case AST_IMPL_DECL:
             /* Methods are emitted in step 3 of generate_c_code (the

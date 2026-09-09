@@ -282,7 +282,11 @@ int command_repl(int argc, char** argv) {
             strncmp(p, "enum ", 5) == 0 || strncmp(p, "enum{", 5) == 0 ||
             strncmp(p, "match ", 6) == 0 || strncmp(p, "match(", 6) == 0 ||
             strncmp(p, "struct ", 7) == 0 ||
-            strncmp(p, "impl ", 5) == 0) {
+            strncmp(p, "impl ", 5) == 0 ||
+            /* 2.9.0: trait declarations parse as statements; the trait
+             * node itself evaluates to nothing in the interpreter (same
+             * contract-only role as in the compiled backend). */
+            strncmp(p, "trait ", 6) == 0) {
             is_stmt = 1;
         }
 
