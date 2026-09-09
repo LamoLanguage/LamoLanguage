@@ -486,24 +486,35 @@ int command_test(int argc, char** argv) {
     /* Locate the test script relative to the lamo binary's directory.
      * Convention: tests/run_tests.sh sits next to the binary (when built
      * in the repo root). We try a few candidate paths:
-     *   1. ./tests/run_tests.sh  (most common — running from repo root)
-     *   2. <bin_dir>/tests/run_tests.sh
-     *   3. <bin_dir>/../tests/run_tests.sh  (when binary is in a build/ subdir)
-     * On Windows we use tests/run_tests.ps1 instead.
-     */
+     *   1. ./tests/run_tests.[sh|ps1]  (most common — running from repo root)
+     *   2. <bin_dir>/tests/run_tests.[sh|ps1]
+     *   3. <bin_dir>/../tests/run_tests.[sh|ps1]  (binary in a build/ subdir)
+     * 2.8.0 (FU2): Windows resolves run_tests.ps1 through the SAME
+     * candidate list (it previously hardcoded the relative path in the
+     * invocation below) and forwards the binary via -LamoPath. */
     {
         const char* candidates[3];
         int n_candidates = 0;
-        candidates[n_candidates++] = "tests/run_tests.sh";
+        const char* script_rel;
+#ifdef _WIN32
+        script_rel = "tests/run_tests.ps1";
+#else
+        script_rel = "tests/run_tests.sh";
+#endif
+        candidates[n_candidates++] = script_rel;
         {
-            /* Build <bin_dir>/tests/run_tests.sh */
+            /* Build <bin_dir>/tests/run_tests.[sh|ps1] */
             char* bin_dir = path_directory(lamo_bin);
             char* joined;
             if (bin_dir) {
-                joined = path_join(bin_dir, "tests/run_tests.sh");
+                joined = path_join(bin_dir, script_rel);
                 if (joined) candidates[n_candidates++] = joined;
-                joined = path_join(bin_dir, "../tests/run_tests.sh");
-                if (joined) candidates[n_candidates++] = joined;
+                joined = path_join(bin_dir, "../");
+                if (joined) {
+                    char* joined2 = path_join(joined, script_rel);
+                    free(joined);
+                    if (joined2) candidates[n_candidates++] = joined2;
+                }
                 free(bin_dir);
             }
         }
@@ -521,8 +532,8 @@ int command_test(int argc, char** argv) {
             /* Free this candidate if it was malloc'd. */
             if (i > 0 && candidates[i] != candidates[0]) free((void*)candidates[i]);
         }
-        fprintf(stderr, "could not find tests/run_tests.sh next to %s\n", lamo_bin);
-        fprintf(stderr, "looked in: tests/run_tests.sh, <bin_dir>/tests/run_tests.sh, <bin_dir>/../tests/run_tests.sh\n");
+        fprintf(stderr, "could not find %s next to %s\n", script_rel, lamo_bin);
+        fprintf(stderr, "looked in: %s, <bin_dir>/%s, <bin_dir>/../%s\n", script_rel, script_rel, script_rel);
         return EXIT_COMPILE_ERROR;
     }
 found:
@@ -531,18 +542,16 @@ found:
         printf("Running Lamo test suite via %s...\n", test_script);
     }
 
-    /* Invoke: sh <test_script> <lamo_bin>
-     * On Windows we'd invoke powershell, but the script path is .ps1.
-     * For simplicity, this POSIX-only invocation uses sh. The Windows
-     * path (run_tests.ps1) is handled separately below. */
+    /* Invoke: sh <test_script> <lamo_bin> (POSIX) or powershell
+     * -File <test_script> -LamoPath <lamo_bin> (Windows, 2.8.0 FU2:
+     * the resolved script and binary are honored instead of a
+     * hardcoded relative path). */
 #ifdef _WIN32
     {
         char ps_cmd[8192];
-        /* powershell -ExecutionPolicy Bypass -File <script> -LamoBinary <bin> */
-        /* But run_tests.ps1 doesn't take a binary arg the same way; it auto-detects.
-         * Just run the .ps1 directly. */
         snprintf(ps_cmd, sizeof(ps_cmd),
-                 "powershell -ExecutionPolicy Bypass -File \"tests\\run_tests.ps1\"");
+                 "powershell -ExecutionPolicy Bypass -File \"%s\" -LamoPath \"%s\"",
+                 test_script, lamo_bin);
         exit_status = system(ps_cmd);
         /* system returns the exit code in the same way waitpid does on POSIX,
          * so we need to extract it. But Windows system() returns the exit
