@@ -255,6 +255,7 @@ Token lexer_next_token(Lexer* l) {
         else if (strcmp(t.value, "impl") == 0) t.type = TOKEN_IMPL;
         else if (strcmp(t.value, "enum") == 0) t.type = TOKEN_ENUM;
         else if (strcmp(t.value, "match") == 0) t.type = TOKEN_MATCH;
+        else if (strcmp(t.value, "trait") == 0) t.type = TOKEN_TRAIT;
         // print, input, isnumber, isstring, exit, abs são identificadores comuns:
         // resolvidos como builtins na tabela de símbolos e no codegen.
         // self também é um identificador comum — o parser/seântico tratam disso
@@ -391,6 +392,7 @@ const char* token_type_name(LamoTokenType type) {
         case TOKEN_IMPL: return "impl";
         case TOKEN_ENUM: return "enum";
         case TOKEN_MATCH: return "match";
+        case TOKEN_TRAIT: return "trait";
         case TOKEN_IDENTIFIER: return "IDENTIFIER";
         case TOKEN_INT: return "INT";
         case TOKEN_FLOAT: return "FLOAT";

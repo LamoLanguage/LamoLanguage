@@ -365,8 +365,22 @@ ASTNode* ast_new_impl_decl_generic(char* struct_name,
                                    char** type_params, int type_param_count,
                                    char** type_args, int type_arg_count,
                                    ASTNode* methods, int line, int column) {
+    return ast_new_impl_decl_full(struct_name, NULL,
+                                  type_params, type_param_count,
+                                  type_args, type_arg_count,
+                                  methods, line, column);
+}
+
+/* 2.9.0 traits: trait-impl constructor — `impl Trait for Type { ... }`.
+ * Shared body of all impl constructors; the legacy forms delegate with
+ * trait_name = NULL. All strings are strdup'd here. */
+ASTNode* ast_new_impl_decl_full(char* struct_name, char* trait_name,
+                                char** type_params, int type_param_count,
+                                char** type_args, int type_arg_count,
+                                ASTNode* methods, int line, int column) {
     ASTImplDecl* node = (ASTImplDecl*)ast_new_node(AST_IMPL_DECL, sizeof(ASTImplDecl), line, column);
     node->struct_name = strdup(struct_name);
+    node->trait_name = trait_name ? strdup(trait_name) : NULL;
     node->methods = methods;
     node->type_params = NULL;
     node->type_param_count = 0;
@@ -394,6 +408,16 @@ ASTNode* ast_new_impl_decl_generic(char* struct_name,
         }
         node->type_arg_count = type_arg_count;
     }
+    return (ASTNode*)node;
+}
+
+/* 2.9.0 traits: trait declaration constructor — `trait Name { sigs }`.
+ * methods is a linked list of AST_FN_DECL signature nodes (body == NULL)
+ * built by the parser; ownership transfers here. name is strdup'd. */
+ASTNode* ast_new_trait_decl(char* name, ASTNode* methods, int line, int column) {
+    ASTTraitDecl* node = (ASTTraitDecl*)ast_new_node(AST_TRAIT_DECL, sizeof(ASTTraitDecl), line, column);
+    node->name = strdup(name);
+    node->methods = methods;
     return (ASTNode*)node;
 }
 
@@ -788,12 +812,23 @@ void ast_free(ASTNode* node) {
             case AST_IMPL_DECL: {
                 ASTImplDecl* id = (ASTImplDecl*)node;
                 free(id->struct_name);
+                /* 2.9.0 traits: free the optional trait name. */
+                free(id->trait_name);
                 ast_free(id->methods);
                 /* Generics PR 2: free impl type params/args. */
                 for (int i = 0; i < id->type_param_count; i++) free(id->type_params[i]);
                 free(id->type_params);
                 for (int i = 0; i < id->type_arg_count; i++) free(id->type_args[i]);
                 free(id->type_args);
+                break;
+            }
+            case AST_TRAIT_DECL: {
+                /* 2.9.0 traits: free the trait name + the signature chain.
+                 * Each signature is a normal AST_FN_DECL (body == NULL —
+                 * ast_free already tolerates NULL bodies). */
+                ASTTraitDecl* td = (ASTTraitDecl*)node;
+                free(td->name);
+                ast_free(td->methods);
                 break;
             }
             case AST_ENUM_DECL: {

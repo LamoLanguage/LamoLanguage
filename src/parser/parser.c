@@ -84,11 +84,12 @@ static void parser_synchronize(Parser* p) {
             case TOKEN_AS:  /* Sprint 4: treat `as` as a sync point too */
             /* Phase 2: struct / impl / enum / match also start new top-level
              * or block-level statements, so the synchronizer should stop at
-             * them after an error. */
+             * them after an error. 2.9.0: traits too. */
             case TOKEN_STRUCT:
             case TOKEN_IMPL:
             case TOKEN_ENUM:
             case TOKEN_MATCH:
+            case TOKEN_TRAIT:
                 return;
             default:
                 advance_p(p);
@@ -1511,6 +1512,151 @@ static ASTNode* parse_block(Parser* p) {
     return (ASTNode*)ast_new_block(head, line, column);
 }
 
+/* 2.9.0 traits: parse ONE method signature inside a trait body —
+ *   fn name(param: Type, ...) [-> RetType] [;]
+ * The shape mirrors the TOKEN_FN branch of parse_statement (same param
+ * and annotation grammar) but there is NO body: a '{' where the
+ * signature should end is a hard error pointing at `impl Trait for
+ * Type`. The returned node is an AST_FN_DECL with body == NULL; the
+ * semantic pass later validates/uses the annotations, and ast_free
+ * handles the NULL body like any other. Type parameter lists on the
+ * SIGNATURE itself (`fn m<T>()`) are rejected — traits are non-generic
+ * contracts in 2.9.0; genericity lives on the impl / struct side. */
+static ASTNode* parse_trait_signature(Parser* p) {
+    eat_p(p, TOKEN_FN);
+    if (p->current.type != TOKEN_IDENTIFIER) {
+        parser_error(p, "expected method name after 'fn' in trait body");
+        return parser_recover(p);
+    }
+    char* name = strdup(p->current.value);
+    int line = p->current.line;
+    int column = p->current.column;
+    eat_p(p, TOKEN_IDENTIFIER);
+
+    if (p->current.type == TOKEN_LT) {
+        parser_error_with_hint(p,
+            "trait method signatures cannot declare their own type parameters",
+            "traits are non-generic contracts; put the type parameter on the impl instead — `impl<T> Trait for Type<T> { ... }`");
+        free(name);
+        return parser_recover(p);
+    }
+
+    expect_p(p, TOKEN_LPAREN, "expected '(' after method name in trait");
+
+    char** params = NULL;
+    char** param_types = NULL;
+    int param_count = 0;
+
+    while (p->current.type != TOKEN_RPAREN && p->current.type != TOKEN_EOF) {
+        if (p->current.type != TOKEN_IDENTIFIER) {
+            parser_error(p, "expected parameter name in trait method signature");
+            break;
+        }
+        {
+            char** resized = realloc(params, sizeof(char*) * (size_t)(param_count + 1));
+            if (!resized) {
+                parser_error(p, "out of memory while growing parameter list");
+                for (int i = 0; i < param_count; i++) free(params[i]);
+                free(params);
+                if (param_types) {
+                    for (int i = 0; i < param_count; i++) free(param_types[i]);
+                    free(param_types);
+                }
+                free(name);
+                return parser_recover(p);
+            }
+            params = resized;
+            params[param_count] = strdup(p->current.value);
+            eat_p(p, TOKEN_IDENTIFIER);
+        }
+        if (p->current.type == TOKEN_COLON) {
+            char** pt_resized = realloc(param_types, sizeof(char*) * (size_t)(param_count + 1));
+            if (!pt_resized) {
+                parser_error(p, "out of memory while growing param_types array");
+                for (int i = 0; i <= param_count; i++) free(params[i]);
+                free(params);
+                for (int i = 0; i < param_count; i++) free(param_types[i]);
+                free(param_types);
+                free(name);
+                return parser_recover(p);
+            }
+            param_types = pt_resized;
+            param_types[param_count] = NULL;
+            eat_p(p, TOKEN_COLON);
+            param_types[param_count] = parse_type_str(p);
+            if (!param_types[param_count]) {
+                for (int i = 0; i <= param_count; i++) free(params[i]);
+                free(params);
+                for (int i = 0; i < param_count; i++) free(param_types[i]);
+                free(param_types);
+                free(name);
+                return parser_recover(p);
+            }
+        } else if (param_types) {
+            /* Keep param_types aligned with params (NULL entry). */
+            char** pt_resized = realloc(param_types, sizeof(char*) * (size_t)(param_count + 1));
+            if (!pt_resized) {
+                parser_error(p, "out of memory while growing param_types array");
+                for (int i = 0; i <= param_count; i++) free(params[i]);
+                free(params);
+                for (int i = 0; i < param_count; i++) free(param_types[i]);
+                free(param_types);
+                free(name);
+                return parser_recover(p);
+            }
+            param_types = pt_resized;
+            param_types[param_count] = NULL;
+        }
+        param_count++;
+        if (p->current.type == TOKEN_COMMA) advance_p(p);
+    }
+    expect_p(p, TOKEN_RPAREN, "missing ')' to close the trait method signature");
+
+    char* return_type_annotation = NULL;
+    if (p->current.type == TOKEN_ARROW) {
+        eat_p(p, TOKEN_ARROW);
+        return_type_annotation = parse_type_str(p);
+        if (!return_type_annotation) {
+            for (int i = 0; i < param_count; i++) free(params[i]);
+            free(params);
+            if (param_types) {
+                for (int i = 0; i < param_count; i++) free(param_types[i]);
+                free(param_types);
+            }
+            free(name);
+            return parser_recover(p);
+        }
+    }
+
+    /* Signatures end here. A '{' means someone wrote a body inside the
+     * trait — the single most likely trait-syntax mistake, so give it a
+     * precise, actionable diagnostic instead of a generic parse error. */
+    if (p->current.type == TOKEN_LBRACE) {
+        parser_error_with_hint(p,
+            "trait methods cannot have bodies",
+            "declare only the signature here and implement it with `impl <Trait> for <Type> { ... }`");
+        free(name);
+        free(return_type_annotation);
+        if (param_types) {
+            for (int i = 0; i < param_count; i++) free(param_types[i]);
+            free(param_types);
+        }
+        for (int i = 0; i < param_count; i++) free(params[i]);
+        free(params);
+        return parser_recover(p);
+    }
+    optional_semicolon(p);
+
+    ASTNode* node = (ASTNode*)ast_new_fn_decl_generic(name,
+                                                      NULL, NULL, 0,
+                                                      params, param_types, param_count,
+                                                      return_type_annotation, NULL,
+                                                      line, column);
+    free(name);
+    free(return_type_annotation);
+    return node;
+}
+
 ASTNode* parse_statement(Parser* p) {
     if (p->current.type == TOKEN_LET) {
         eat_p(p, TOKEN_LET);
@@ -1920,13 +2066,36 @@ ASTNode* parse_statement(Parser* p) {
         }
 
         if (p->current.type != TOKEN_IDENTIFIER) {
-            parser_error(p, "expected struct name after 'impl'");
+            parser_error(p, "expected name after 'impl' (a struct for `impl Type { ... }` or a trait for `impl Trait for Type { ... }`)");
             for (int i = 0; i < impl_type_param_count; i++) { free(impl_type_params[i]); free(impl_param_constraints[i]); }
             free(impl_type_params); free(impl_param_constraints);
             return parser_recover(p);
         }
-        char* struct_name = strdup(p->current.value);
+        char* head_name = strdup(p->current.value);
         eat_p(p, TOKEN_IDENTIFIER);
+
+        /* 2.9.0 traits: `impl Trait for Struct { ... }` — the `for`
+         * keyword flips the parsed identifier from a struct name into a
+         * TRAIT name. Unambiguous: a plain impl's next token is '<' or
+         * '{', never `for` (`for` is a reserved keyword, so no struct
+         * named `for` can exist). */
+        char* trait_name = NULL;
+        char* struct_name = NULL;
+        if (p->current.type == TOKEN_FOR) {
+            eat_p(p, TOKEN_FOR);
+            trait_name = head_name;
+            if (p->current.type != TOKEN_IDENTIFIER) {
+                parser_error(p, "expected struct name after 'for' in trait impl");
+                free(trait_name);
+                for (int i = 0; i < impl_type_param_count; i++) { free(impl_type_params[i]); free(impl_param_constraints[i]); }
+                free(impl_type_params); free(impl_param_constraints);
+                return parser_recover(p);
+            }
+            struct_name = strdup(p->current.value);
+            eat_p(p, TOKEN_IDENTIFIER);
+        } else {
+            struct_name = head_name;
+        }
 
         /* RFC §4.4: optional echo of the type parameters on the struct
          * name — `Stack<T>`. Unambiguous in this position: an impl body
@@ -1942,6 +2111,7 @@ ASTNode* parse_statement(Parser* p) {
                 for (int i = 0; i < impl_type_param_count; i++) { free(impl_type_params[i]); free(impl_param_constraints[i]); }
                 free(impl_type_params); free(impl_param_constraints);
                 free(struct_name);
+                free(trait_name);
                 return parser_recover(p);
             }
         }
@@ -1972,15 +2142,71 @@ ASTNode* parse_statement(Parser* p) {
         }
         expect_p(p, TOKEN_RBRACE, "missing '}' at end of impl body");
         if (p->current.type == TOKEN_SEMICOLON) advance_p(p);
-        ASTNode* node = (ASTNode*)ast_new_impl_decl_generic(struct_name,
-                                                            impl_type_params, impl_type_param_count,
-                                                            impl_type_args, impl_type_arg_count,
-                                                            head, line, column);
+        /* 2.9.0 traits: the full constructor routes BOTH forms — plain
+         * impls carry trait_name = NULL, trait impls carry the trait. */
+        ASTNode* node = (ASTNode*)ast_new_impl_decl_full(struct_name, trait_name,
+                                                         impl_type_params, impl_type_param_count,
+                                                         impl_type_args, impl_type_arg_count,
+                                                         head, line, column);
         for (int i = 0; i < impl_type_param_count; i++) { free(impl_type_params[i]); free(impl_param_constraints[i]); }
         free(impl_type_params); free(impl_param_constraints);
         for (int i = 0; i < impl_type_arg_count; i++) free(impl_type_args[i]);
         free(impl_type_args);
         free(struct_name);
+        free(trait_name);
+        return node;
+    }
+    /* ─── 2.9.0 traits: trait declaration ─────────────────────────────── */
+    else if (p->current.type == TOKEN_TRAIT) {
+        int line = p->current.line;
+        int column = p->current.column;
+        eat_p(p, TOKEN_TRAIT);
+        if (p->current.type != TOKEN_IDENTIFIER) {
+            char rw_hint[160];
+            parser_reserved_word_hint(rw_hint, sizeof(rw_hint), p);
+            parser_error_with_hint(p, "expected trait name after 'trait'",
+                                   rw_hint[0] ? rw_hint : NULL);
+            return parser_recover(p);
+        }
+        char* name = strdup(p->current.value);
+        eat_p(p, TOKEN_IDENTIFIER);
+        /* Traits are non-generic contracts in 2.9.0 — a '<' here is a
+         * mistake with a specific explanation. */
+        if (p->current.type == TOKEN_LT) {
+            char gen_hint[192];
+            snprintf(gen_hint, sizeof(gen_hint),
+                     "put the type parameter on the impl instead — `impl<T> %s for Type<T> { ... }`",
+                     name);
+            parser_error_with_hint(p,
+                "traits cannot declare type parameters",
+                gen_hint);
+            free(name);
+            return parser_recover(p);
+        }
+        expect_p(p, TOKEN_LBRACE, "expected '{' to open trait body");
+        ASTNode* head = NULL;
+        ASTNode* tail = NULL;
+        while (p->current.type != TOKEN_RBRACE && p->current.type != TOKEN_EOF) {
+            if (p->current.type != TOKEN_FN) {
+                parser_error_with_hint(p, "expected 'fn' inside trait body",
+                                       "a trait declares method signatures only — e.g. `fn area() -> float;`");
+                parser_synchronize(p);
+                while (p->current.type != TOKEN_FN && p->current.type != TOKEN_RBRACE && p->current.type != TOKEN_EOF) {
+                    advance_p(p);
+                }
+                continue;
+            }
+            ASTNode* sig = parse_trait_signature(p);
+            if (sig) {
+                if (!head) { head = sig; tail = sig; }
+                else { tail->next = sig; tail = sig; }
+            }
+            if (p->panic_mode) parser_synchronize(p);
+        }
+        expect_p(p, TOKEN_RBRACE, "missing '}' at end of trait body");
+        if (p->current.type == TOKEN_SEMICOLON) advance_p(p);
+        ASTNode* node = ast_new_trait_decl(name, head, line, column);
+        free(name);
         return node;
     }
     else if (p->current.type == TOKEN_ENUM) {
@@ -2715,7 +2941,7 @@ static int parser_try_consume_pub(Parser* p) {
     advance_p(p);  /* speculative: token after `pub` */
     if (p->current.type == TOKEN_LET || p->current.type == TOKEN_FN ||
         p->current.type == TOKEN_STRUCT || p->current.type == TOKEN_IMPL ||
-        p->current.type == TOKEN_ENUM) {
+        p->current.type == TOKEN_ENUM || p->current.type == TOKEN_TRAIT) {
         is_decl_modifier = 1;
     }
 

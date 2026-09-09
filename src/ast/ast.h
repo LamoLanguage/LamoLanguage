@@ -61,6 +61,13 @@ typedef enum {
     AST_ENUM_DECL,
     AST_MATCH_STMT,
     AST_STRUCT_LITERAL,
+    /* 2.9.0 traits: `trait Name { fn sig(...); ... }` — a named set of
+     * REQUIRED method signatures. `impl Trait for Type { ... }` blocks
+     * are regular AST_IMPL_DECL nodes carrying trait_name (see
+     * ASTImplDecl). The trait node itself generates no code; it is a
+     * compile-time contract consulted by the semantic pass (completeness
+     * of impls + first-class generic constraints `T: Shape`). */
+    AST_TRAIT_DECL,
     /* 2.7.0 (FU4): qualified variant reference in VALUE position —
      * `Enum::Variant` for a unit variant (e.g. `Option::None`). The
      * semantic pass resolves the pair against the enum table and stamps
@@ -364,10 +371,18 @@ typedef struct {
 /* Phase 2: impl block.
  *   impl Player { fn damage(amount: int) { self.hp -= amount; } ... }
  * struct_name is owned (strdup'd). methods is a linked list of AST_FN_DECL
- * nodes (linked via ->next); we take ownership. */
+ * nodes (linked via ->next); we take ownership.
+ *
+ * 2.9.0 traits: trait_name is non-NULL for trait impls —
+ *   impl Printable for Player { fn to_text() -> string { ... } }
+ * The validation that the impl satisfies the trait's contract lives in
+ * the semantic pass; codegen treats trait-impl methods exactly like
+ * inherent methods (mangled `lamo_method_<Type>__<name>`). trait_name is
+ * owned (strdup'd) and freed in ast_free(); NULL for plain impls. */
 typedef struct {
     ASTNode base;
     char* struct_name;
+    char* trait_name;
     struct ASTNode* methods;
     /* RFC §4.4: generic impls declare their own type parameters and
      * echo them on the struct name:
@@ -382,6 +397,24 @@ typedef struct {
     char** type_args;
     int type_arg_count;
 } ASTImplDecl;
+
+/* 2.9.0 traits: trait declaration.
+ *   trait Shape {
+ *       fn area() -> float;
+ *       fn describe(prefix: string) -> string;
+ *   }
+ * methods is a linked list of AST_FN_DECL nodes with body == NULL
+ * (signatures only — bodies are not allowed inside a trait; the parser
+ * enforces that). Each signature carries the same annotation fields as
+ * a regular function (param_types / return_type_annotation), which the
+ * semantic pass checks against the matching impl method whenever BOTH
+ * sides annotate. The node generates no code. name is owned (strdup'd)
+ * and freed in ast_free(). */
+typedef struct {
+    ASTNode base;
+    char* name;
+    struct ASTNode* methods;   /* AST_FN_DECL chain, body == NULL */
+} ASTTraitDecl;
 
 /* Phase 2: enum declaration.
  *   enum Color { Red; Green; Blue; }
@@ -622,6 +655,20 @@ ASTNode* ast_new_impl_decl_generic(char* struct_name,
                                    char** type_params, int type_param_count,
                                    char** type_args, int type_arg_count,
                                    ASTNode* methods, int line, int column);
+
+/* 2.9.0 traits: full impl constructor — `impl [tp] Trait for Type [echo]`.
+ * trait_name may be NULL for plain (inherent) impls; the legacy ctors
+ * delegate with NULL. All strings are strdup'd here. */
+ASTNode* ast_new_impl_decl_full(char* struct_name, char* trait_name,
+                                char** type_params, int type_param_count,
+                                char** type_args, int type_arg_count,
+                                ASTNode* methods, int line, int column);
+
+/* 2.9.0 traits: trait declaration — `trait Name { fn sig; ... }`.
+ * `methods` is a linked list of AST_FN_DECL signature nodes (body ==
+ * NULL), built by the parser and taken ownership of here. name is
+ * strdup'd. */
+ASTNode* ast_new_trait_decl(char* name, ASTNode* methods, int line, int column);
 
 /* enum Name { Variant, ... } - `variants` is an array of strings, strdup'd
  * here. The caller retains ownership of the input array.

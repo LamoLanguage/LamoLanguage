@@ -11,6 +11,9 @@ typedef enum {
     TOKEN_AS,  /* Sprint 4: `as` keyword for `import "..." as alias;` */
     /* Phase 2: struct / impl / enum / match keywords. */
     TOKEN_STRUCT, TOKEN_IMPL, TOKEN_ENUM, TOKEN_MATCH,
+    /* 2.9.0: `trait` keyword — trait declarations (`trait Name { ... }`)
+     * and trait-constrained type parameters (`T: Shape`). */
+    TOKEN_TRAIT,
 
     // Literals & Identifiers
     TOKEN_IDENTIFIER, TOKEN_INT, TOKEN_FLOAT, TOKEN_STRING,
