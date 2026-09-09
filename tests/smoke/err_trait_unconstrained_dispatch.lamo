@@ -1,0 +1,3 @@
+fn bad<T>(t: T) -> int {
+    return t.foo()
+}

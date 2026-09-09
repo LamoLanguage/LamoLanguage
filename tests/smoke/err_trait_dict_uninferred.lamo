@@ -1,0 +1,7 @@
+trait Shape {
+    fn area() -> float;
+}
+fn make<T: Shape>() -> int {
+    return 1
+}
+print(make())

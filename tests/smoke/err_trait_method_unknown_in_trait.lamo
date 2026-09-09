@@ -1,0 +1,10 @@
+trait Shape {
+    fn area() -> float;
+}
+struct Circle { r: float }
+impl Shape for Circle {
+    fn area() -> float { return 1.0 }
+}
+fn shrink<T: Shape>(s: T) -> float {
+    return s.shrink()
+}

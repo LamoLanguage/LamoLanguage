@@ -1,0 +1,36 @@
+// 2.10.0 — check-only surface for dictionary dispatch: trait methods on
+// type-parameter receivers, generic trait impls (impl<T> Shape for
+// Stack<T>) satisfy every instantiation, forwarding through nested
+// generic fns, and catalogue constraints mixing with trait constraints.
+trait Shape {
+    fn area() -> float;
+}
+trait Described {
+    fn describe(prefix: string) -> string;
+}
+struct Stack<T> { items: array<T>, top: int }
+impl<T> Shape for Stack<T> {
+    fn area() -> float { return 0.0 + self.top }
+}
+impl<T> Described for Stack<T> {
+    fn describe(prefix: string) -> string { return prefix }
+}
+struct Plain { v: int }
+impl Shape for Plain {
+    fn area() -> float { return 0.0 + self.v }
+}
+fn measure<T: Shape>(s: T) -> float {
+    return s.area()
+}
+fn measure2<A: Shape, B: Shape>(a: A, b: B) -> float {
+    return measure(a) + measure(b)
+}
+fn tag<T: Shape>(s: T, label: string) -> string {
+    return label
+}
+let st: Stack<int> = Stack<int> { items: [], top: 4 }
+let pl = Plain { v: 2 }
+let f1: float = measure(st)
+let f2: float = measure2(st, pl)
+let s1: string = tag(st, "x")
+print(f1 + f2)

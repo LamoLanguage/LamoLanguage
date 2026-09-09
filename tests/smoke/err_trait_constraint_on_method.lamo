@@ -1,0 +1,9 @@
+trait Shape {
+    fn area() -> float;
+}
+struct Box { v: int }
+impl Box {
+    fn measure<T: Shape>(m: T) -> float {
+        return m.area()
+    }
+}

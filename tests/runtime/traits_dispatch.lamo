@@ -1,0 +1,74 @@
+// 2.10.0 trait dictionary dispatch — method calls on type-parameter
+// receivers resolve through hidden dictionary parameters (static per
+// call site; SPEC §3.7/§7.8). Runs identically under `lamo run` and
+// `lamo eval` (interpreter dispatches through the impl registry).
+
+trait Shape {
+    fn area() -> float;
+    fn name() -> string;
+}
+
+trait Described {
+    fn describe(prefix: string) -> string;
+}
+
+struct Circle { r: float }
+struct Square { side: float }
+
+impl Shape for Circle {
+    fn area() -> float { return 3.0 * self.r * self.r }
+    fn name() -> string { return "circle" }
+}
+
+impl Shape for Square {
+    fn area() -> float { return self.side * self.side }
+    fn name() -> string { return "square" }
+}
+
+impl Described for Circle {
+    fn describe(prefix: string) -> string { return prefix + "a circle" }
+}
+
+// ── Core dispatch: trait methods called on the type parameter ──
+fn area_of<T: Shape>(s: T) -> float {
+    return s.area()
+}
+
+fn name_of<T: Shape>(s: T) -> string {
+    return s.name()
+}
+
+let c = Circle { r: 2.0 }
+let q = Square { side: 3.0 }
+print(name_of(c))
+print(area_of(c))
+print(name_of(q))
+print(area_of(q))
+
+// ── Return type flows through the trait annotation ──
+fn twice_area<T: Shape>(s: T) -> float {
+    return s.area() + s.area()
+}
+print(twice_area(c))
+
+// ── Forwarding: generic calls generic, dictionary rides along ──
+fn render_twice<T: Shape>(s: T) -> float {
+    return area_of(s) + area_of(s)
+}
+print(render_twice(q))
+
+// ── Two constrained parameters, two dictionaries ──
+fn compare<A: Shape, B: Shape>(p: A, r: B) -> bool {
+    return p.area() > r.area()
+}
+print(compare(c, q))
+
+// ── Mixed trait methods and let bindings on the same parameter ──
+fn shout<T: Shape>(s: T) -> string {
+    let n: string = s.name()
+    return n + "!"
+}
+print(shout(c))
+
+// ── Trait impl methods ride the interpreter registry too ──
+print(c.describe("behold: "))

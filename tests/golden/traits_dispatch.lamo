@@ -1,0 +1,19 @@
+// 2.10.0 golden: pins the trait dictionary dispatch ABI — hidden
+// `LamoDict_<Trait>* _dict_<T>` parameters, static instances built
+// from trait impls, `_dict_T->method(...)` receivers, and generic→
+// generic dictionary forwarding.
+trait Shape {
+    fn area() -> float;
+}
+struct Circle { r: float }
+impl Shape for Circle {
+    fn area() -> float { return 3.0 * self.r * self.r }
+}
+fn twice<T: Shape>(s: T) -> float {
+    return s.area() + s.area()
+}
+fn quad<T: Shape>(s: T) -> float {
+    return twice(s) + twice(s)
+}
+let c = Circle { r: 1.0 }
+print(quad(c))

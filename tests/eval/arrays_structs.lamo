@@ -1,0 +1,99 @@
+// 2.10.0 (FU-vmc): the interpreter models ARRAYS and STRUCTS natively
+// (EVAL_VAL_ARRAY / EVAL_VAL_STRUCT) with reference semantics matching
+// the C backend: aliasing, in-place mutation, methods (inherent and
+// trait impls), identity equality, and truthiness (SPEC §10.7 parity
+// with `lamo run`). Output must match arrays_structs.expected.
+
+// ── Arrays: literals, index, negative index, len ──
+let xs = [1, 2, 3]
+print(xs)
+print(xs[0])
+print(xs[-1])
+print(xs.len)
+print(len(xs))
+
+// ── Arrays: push / pop, global and member forms ──
+xs.push(4)
+push(xs, 5)
+print(xs)
+print(pop(xs))
+print(xs.pop())
+print(xs)
+
+// ── Arrays: place assignment, compound ──
+xs[0] = 10
+xs[1] += 5
+print(xs)
+
+// ── Arrays: aliasing (reference semantics — backend parity) ──
+let ys = xs
+ys[2] = 99
+print(xs[2])
+print(xs == ys)
+let zs = [7, 8]
+print(xs == zs)
+
+// ── Arrays: truthiness ──
+if (xs) { print("xs truthy") }
+let empty = []
+if (!empty) { print("empty falsy") }
+
+// ── Arrays: nested + mixed elements ──
+let pairs = [[1, 2], [3, 4]]
+print(pairs[1][0])
+print([1, "two", true])
+
+// ── Structs: literals, fields, defaults, print ──
+struct Player { name: string, hp: int, level: int }
+
+let p = Player { name: "Arthur", hp: 100, level: 1 }
+print(p)
+print(p.name)
+print(p.level)      // missing field defaults to 0
+
+// ── Structs: field assignment + compound ──
+p.hp = 80
+p.level += 2
+print(p.hp)
+print(p.level)
+
+// ── Structs: methods (inherent) + implicit self ──
+impl Player {
+    fn hit(amount: int) { self.hp -= amount }
+    fn alive() -> bool { return self.hp > 0 }
+    fn label(prefix: string) -> string { return prefix + self.name }
+}
+
+p.hit(30)
+print(p.hp)
+print(p.alive())
+print(p.label("hero: "))
+
+// ── Structs: methods mutate the shared instance ──
+let q = p
+q.hit(10)
+print(p.hp)
+
+// ── Traits: impl methods dispatch like inherent methods ──
+trait Described {
+    fn describe(prefix: string) -> string;
+}
+
+impl Described for Player {
+    fn describe(prefix: string) -> string { return prefix + self.name }
+}
+
+print(p.describe("player: "))
+
+// ── Structs: truthiness + identity equality ──
+if (p) { print("p truthy") }
+print(p == q)
+let r = Player { name: "x", hp: 1, level: 0 }
+print(p == r)
+
+// ── Structs holding arrays ──
+struct Bag { items: array<int> }
+let b = Bag { items: [1, 2] }
+b.items.push(3)
+print(b.items.len)
+print(b)

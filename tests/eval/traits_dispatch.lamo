@@ -1,0 +1,27 @@
+// 2.10.0 (FU-vmc): the interpreter runs trait declarations, trait
+// impls, and trait-constrained generic dispatch through its impl
+// registry (SPEC §10.7 parity — same output as `lamo run`).
+
+trait Greeter {
+    fn greet() -> string;
+}
+
+struct Friend { name: string }
+struct Stranger { origin: string }
+
+impl Greeter for Friend {
+    fn greet() -> string { return "hi " + self.name }
+}
+
+impl Greeter for Stranger {
+    fn greet() -> string { return "hello from " + self.origin }
+}
+
+fn hello<T: Greeter>(who: T) -> string {
+    return who.greet()
+}
+
+let f = Friend { name: "Ana" }
+let s = Stranger { origin: " afar" }
+print(hello(f))
+print(hello(s))

@@ -1,0 +1,3 @@
+fn bad<T: Num>(t: T) -> int {
+    return t.abs()
+}
