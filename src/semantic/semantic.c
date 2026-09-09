@@ -184,9 +184,13 @@ typedef struct {
      * being visited (`fn id<T>` while walking its body/literals). Set in
      * the AST_FN_DECL case; NULL/0 elsewhere. Struct literals like
      * `Option<T> { ... }` consult this so payloads can be parameterized
-     * over the enclosing function's parameters. */
+     * over the enclosing function's parameters.
+     * 2.10.0: cur_fn_tp_constraints mirrors the names 1:1 (borrowed from
+     * the fn decl's type_param_constraints) so trait-dictionary dispatch
+     * can resolve the constraint of a receiver's type parameter. */
     const char* const* cur_fn_tp_names;
     int cur_fn_tp_count;
+    const char* const* cur_fn_tp_constraints;
 } SemanticContext;
 
 static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node);
@@ -209,6 +213,14 @@ static ASTImplDecl* find_trait_impl_before(SemanticContext* ctx, const char* tra
                                            const char* struct_name, const ASTNode* before);
 static int lamo_type_satisfies_trait(SemanticContext* ctx, const char* normalized,
                                      const char* trait_name);
+/* 2.10.0 trait dictionary dispatch: build the hidden-dictionary stamp
+ * for a call to a trait-constrained generic fn. Defined with the other
+ * trait helpers; forward-declared for the call-site block. */
+static void stamp_trait_dicts(SemanticContext* ctx, ASTNode* call_node,
+                              const char* fn_name,
+                              const char* const* tp_names, int tp_count,
+                              const char* const* tp_constraints,
+                              const char* const* bound_values);
 /* 2.9.0: find_enum_def is defined further down (with the other registry
  * helpers) but the trait-satisfaction helper above already calls it. */
 static ASTEnumDecl* find_enum_def(SemanticContext* ctx, const char* name);
@@ -547,6 +559,93 @@ static int lamo_type_satisfies_trait(SemanticContext* ctx, const char* normalize
     if (find_enum_def(ctx, head)) return 0;           /* enums: no impls */
     if (!find_struct_def(ctx, head)) return 0;        /* not a declared struct */
     return find_trait_impl_before(ctx, trait_name, head, NULL) != NULL;
+}
+
+/* 2.10.0 trait dictionary dispatch: FORWARDING satisfaction. `val` may
+ * be a type parameter of the ENCLOSING generic fn (`draw(x)` inside
+ * `fn wrapper<T: Shape>(x: T)`). The concrete type argument is unknown
+ * here, but the enclosing fn's own call sites already enforce `T:
+ * Shape` — so an identical constraint on the enclosing parameter
+ * transitively guarantees satisfaction. Only fn-level (top-level fn)
+ * parameters forward: codegen emits hidden dictionary parameters for
+ * generic fns, and methods cannot declare trait-constrained type
+ * parameters. */
+static int enclosing_tp_satisfies_trait(SemanticContext* ctx, const char* val,
+                                        const char* trait_name) {
+    if (!val || !trait_name) return 0;
+    if (ctx->current_impl_struct) return 0;            /* method bodies: no forwarding */
+    if (!ctx->cur_fn_tp_constraints) return 0;
+    for (int t = 0; t < ctx->cur_fn_tp_count; t++) {
+        const char* tpn = ctx->cur_fn_tp_names[t];
+        const char* con = ctx->cur_fn_tp_constraints[t];
+        if (tpn && con && strcmp(val, tpn) == 0 &&
+            lamo_constraint_kind(con) < 0 && strcmp(con, trait_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 2.10.0 trait dictionary dispatch: stamp the hidden dictionary
+ * arguments for a call to a trait-constrained generic fn. One entry per
+ * trait-constrained type parameter, in the callee's type-parameter
+ * order (matching the codegen's hidden-parameter emission order). The
+ * target is the concrete struct head of the bound value, or the
+ * enclosing fn's type-parameter name when the value IS one (forwarding
+ * the enclosing fn's own dictionary). A trait-constrained parameter
+ * that is still UNBOUND at the call site is an error: the dictionary
+ * must be known statically. */
+static void stamp_trait_dicts(SemanticContext* ctx, ASTNode* call_node,
+                              const char* fn_name,
+                              const char* const* tp_names, int tp_count,
+                              const char* const* tp_constraints,
+                              const char* const* bound_values) {
+    if (!call_node || tp_count <= 0) return;
+    int dict_count = 0;
+    for (int t = 0; t < tp_count; t++) {
+        const char* con = tp_constraints ? tp_constraints[t] : NULL;
+        if (!con || lamo_constraint_kind(con) >= 0) continue;
+        if (!find_trait_def(ctx, con)) continue;
+        if (!bound_values || !bound_values[t]) {
+            char message[300];
+            snprintf(message, sizeof(message),
+                     "type parameter '%s' of '%s' could not be inferred at this call site (required to pass the '%s' trait dictionary)",
+                     tp_names[t], fn_name ? fn_name : "?", con);
+            semantic_error_at(ctx, call_node->line, call_node->column, message);
+            return;
+        }
+        dict_count++;
+    }
+    if (dict_count == 0) return;
+    SemaTraitDictList* list = ast_new_trait_dict_list(dict_count);
+    int d = 0;
+    for (int t = 0; t < tp_count; t++) {
+        const char* con = tp_constraints ? tp_constraints[t] : NULL;
+        if (!con || lamo_constraint_kind(con) >= 0) continue;
+        if (!find_trait_def(ctx, con)) continue;
+        const char* val = bound_values[t];
+        const char* target = NULL;
+        int forwards = 0;
+        int is_enclosing_tp = 0;
+        if (!ctx->current_impl_struct && ctx->cur_fn_tp_names) {
+            for (int f = 0; f < ctx->cur_fn_tp_count; f++) {
+                if (strcmp(val, ctx->cur_fn_tp_names[f]) == 0) { is_enclosing_tp = 1; break; }
+            }
+        }
+        if (is_enclosing_tp) {
+            target = val;                       /* forward enclosing dict */
+            forwards = 1;
+        } else {
+            char head[64];
+            ann_head(val, head, sizeof(head));
+            target = lamo_intern_type(head);    /* bare struct name */
+        }
+        list->items[d].trait_name = con;
+        list->items[d].target = target;
+        list->items[d].forwards = forwards;
+        d++;
+    }
+    call_node->sema_trait_dicts = list;
 }
 
 static int is_numeric_type(LamoType type) {
@@ -1763,7 +1862,14 @@ static LamoType semantic_visit_call_full(SemanticContext* ctx, const char* name,
         }
 
         /* ── SPEC §7.3 / Generics PR 2 + PR 6 checks ─────────────────── */
-        if (checkable && symbol->param_full && symbol->arity == arg_count) {
+        /* 2.10.0: the `symbol->param_full ||` clause lets ZERO-parameter
+         * generic fns enter — a trait-constrained parameter still needs
+         * its dictionary stamped (or the uninferred-param error) even
+         * when the call passes no arguments. Safe: the arg loop below
+         * only dereferences param_full when arg_count > 0, which implies
+         * param_count > 0 and therefore param_full != NULL. */
+        if (checkable && symbol->arity == arg_count &&
+            (symbol->param_full || symbol->tp_count > 0)) {
             AnnSubstMap map;
             map.names = symbol->tp_names;
             map.values = malloc(sizeof(const char*) * (size_t)(symbol->tp_count > 0 ? symbol->tp_count : 1));
@@ -1863,7 +1969,12 @@ static LamoType semantic_visit_call_full(SemanticContext* ctx, const char* name,
                             semantic_error_at(ctx, line, column, message);
                         }
                     } else if (find_trait_def(ctx, con)) {
-                        if (!lamo_type_satisfies_trait(ctx, val, con)) {
+                        /* 2.10.0: a value that is the ENCLOSING fn's own
+                         * type parameter forwards transitively — the
+                         * enclosing fn's call sites enforce its identical
+                         * constraint (dictionary dispatch). */
+                        if (!lamo_type_satisfies_trait(ctx, val, con) &&
+                            !enclosing_tp_satisfies_trait(ctx, val, con)) {
                             char message[400];
                             char hint[260];
                             char val_head[64];
@@ -1885,6 +1996,12 @@ static LamoType semantic_visit_call_full(SemanticContext* ctx, const char* name,
                     /* else: unknown constraint name — already reported at
                      * the declaration site; don't double-report. */
                 }
+                /* 2.10.0 trait dictionary dispatch: stamp the hidden
+                 * dictionary arguments (one per trait-constrained type
+                 * parameter) so codegen appends them at this call site. */
+                stamp_trait_dicts(ctx, call_node_for_annotation, name,
+                                  symbol->tp_names, symbol->tp_count,
+                                  symbol->tp_constraints, map.values);
             }
 
             /* Return-type computation with substitution. */
@@ -2393,6 +2510,34 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                     }
                 }
             }
+            /* 2.10.0 (FU-vmc): alias flow — `let q = p` inherits the
+             * source variable's struct identity so field access and
+             * method calls (inherent AND trait impls) resolve through
+             * the alias. Before this, aliasing a struct value silently
+             * produced a nameless-struct variable and every subsequent
+             * member call failed with "cannot call method ... on value
+             * of type 'struct'" — on BOTH backends (same semantic pass). */
+            if (!inferred_struct_name && var_decl->initializer &&
+                var_decl->initializer->type == AST_IDENTIFIER) {
+                Symbol* src = scope_find(ctx->current_scope,
+                                         ((ASTIdentifier*)var_decl->initializer)->name);
+                if (src && src->kind == SYMBOL_VAR) {
+                    const char* src_head = NULL;
+                    if (src->struct_name) {
+                        src_head = src->struct_name;
+                    } else if (src->full_type) {
+                        char ah[64];
+                        ann_head(src->full_type, ah, sizeof(ah));
+                        if (find_struct_def(ctx, ah)) src_head = lamo_intern_type(ah);
+                    }
+                    if (src_head && find_struct_def(ctx, src_head)) {
+                        if (init_type == LAMO_TYPE_UNKNOWN) init_type = LAMO_TYPE_STRUCT;
+                        if (init_type == LAMO_TYPE_STRUCT) {
+                            inferred_struct_name = src_head;
+                        }
+                    }
+                }
+            }
             /* Sprint 3: validate type annotation if present. The check is
              * strict: int != float (annotated int with float initializer
              * is an error), and string/bool are entirely separate. The
@@ -2577,9 +2722,11 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
             const char* previous_fn_name = ctx->current_fn_name;
 
             /* Expose this fn's own type parameters to literal/annotation
-             * validation while its body is walked. */
+             * validation while its body is walked. 2.10.0: constraints
+             * ride along for trait-dictionary dispatch. */
             const char* const* saved_fn_tps = ctx->cur_fn_tp_names;
             int saved_fn_tp_count = ctx->cur_fn_tp_count;
+            const char* const* saved_fn_tp_cons = ctx->cur_fn_tp_constraints;
             const char** own_tp_interned = NULL;
             if (fn_decl->type_param_count > 0) {
                 own_tp_interned = malloc(sizeof(const char*) * (size_t)fn_decl->type_param_count);
@@ -2592,6 +2739,7 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                 }
                 ctx->cur_fn_tp_names = own_tp_interned;
                 ctx->cur_fn_tp_count = fn_decl->type_param_count;
+                ctx->cur_fn_tp_constraints = (const char* const*)fn_decl->type_param_constraints;
             }
 
             ctx->current_scope = scope_push(parent);
@@ -2773,6 +2921,7 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
             /* Restore enclosing fn type-parameter scope (PR 2). */
             ctx->cur_fn_tp_names = saved_fn_tps;
             ctx->cur_fn_tp_count = saved_fn_tp_count;
+            ctx->cur_fn_tp_constraints = saved_fn_tp_cons;
             free(own_tp_interned);
 
             Scope* finished = ctx->current_scope;
@@ -3222,6 +3371,30 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                 }
                 for (ASTNode* m = id->methods; m; m = m->next) {
                     if (m->type == AST_FN_DECL) {
+                        /* 2.10.0: trait-constrained type parameters ride
+                         * the dictionary-dispatch ABI, whose hidden
+                         * parameters codegen emits for STANDALONE fns
+                         * only. Impl methods keep the erasure ABI (self
+                         * + declared params), so a trait constraint here
+                         * would promise a dictionary nobody passes. */
+                        ASTFnDecl* md = (ASTFnDecl*)m;
+                        if (md->type_param_constraints) {
+                            for (int t = 0; t < md->type_param_count; t++) {
+                                const char* con = md->type_param_constraints[t];
+                                if (con && lamo_constraint_kind(con) < 0 &&
+                                    find_trait_def(ctx, con)) {
+                                    char message[340];
+                                    snprintf(message, sizeof(message),
+                                             "trait-constrained type parameter '%s: %s' on method '%s' is not supported (method dispatch keeps the erased ABI)",
+                                             md->type_params[t], con, md->name);
+                                    char hint[280];
+                                    snprintf(hint, sizeof(hint),
+                                             "declare a standalone generic fn (`fn %s_for<T: %s>(r: %s, ...)`) or move the generic behavior to a free function",
+                                             md->name, con, id->struct_name ? id->struct_name : "T");
+                                    semantic_error_at_hint(ctx, m->line, m->column, message, hint);
+                                }
+                            }
+                        }
                         m->sema_struct_name = id->struct_name;
                         semantic_visit_statement(ctx, m);
                     }
@@ -4025,15 +4198,21 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
                     obj_type = LAMO_TYPE_STRUCT;
                 }
             }
-            /* 2.9.0 traits: honest diagnostics for method calls on
-             * TYPE-PARAMETER receivers (`s.name()` where `s: T` of the
-             * enclosing generic fn/impl). The erasure backend resolves
-             * method calls through the receiver's CONCRETE struct name;
-             * a bare type parameter has none (no monomorphization, no
-             * vtables — RFC §12.4 keeps dispatch static), so before this
-             * check such calls silently fell into the codegen's
-             * lamo_make_int(0) fallback. Trait constraints check CALL
-             * SITES; they do not enable dynamic dispatch. */
+            /* 2.10.0 traits: DICTIONARY DISPATCH for method calls on
+             * TYPE-PARAMETER receivers (`s.area()` where `s: T` and
+             * `T: Shape` of the enclosing generic fn). Generics compile
+             * ONCE under erasure, so the receiver has no concrete struct
+             * name to dispatch through (RFC §12.4 keeps dispatch static;
+             * 2.9.0 rejected these calls outright). Instead, when the
+             * type parameter's FN-LEVEL constraint is a declared trait,
+             * the call resolves through the trait's signature: arity and
+             * argument compatibility are checked HERE, the node is
+             * stamped (sema_trait_name + sema_tp_receiver) so codegen
+             * emits `_dict_T->method(...)` through the hidden dictionary
+             * parameter, and the trait's return annotation flows into
+             * the call's full type. Catalogue constraints (Ord, Eq, ...)
+             * and unconstrained parameters keep the honest diagnostics —
+             * they carry no methods. */
             {
                 const char* recv_full = NULL;
                 if (mc->object->type == AST_IDENTIFIER) {
@@ -4042,23 +4221,140 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
                 }
                 if (!recv_full) recv_full = mc->object->sema_full_type;
                 if (recv_full) {
-                    int recv_is_tp = 0;
+                    int recv_tp_idx = -1;
                     int scope_tp_count = ctx->cur_fn_tp_count + ctx->impl_tp_count;
                     for (int t = 0; t < scope_tp_count; t++) {
                         const char* tpn = t < ctx->cur_fn_tp_count
                             ? ctx->cur_fn_tp_names[t]
                             : ctx->impl_tp_names[t - ctx->cur_fn_tp_count];
-                        if (tpn && strcmp(recv_full, tpn) == 0) { recv_is_tp = 1; break; }
+                        if (tpn && strcmp(recv_full, tpn) == 0) { recv_tp_idx = t; break; }
                     }
-                    if (recv_is_tp) {
-                        char message[320];
-                        char hint[220];
-                        snprintf(message, sizeof(message),
-                                 "cannot call method '%s' on a type-parameter value ('%s' is a generic parameter here; generics are erased at compile time, so the method cannot be resolved statically)",
-                                 mc->member_name, recv_full);
-                        snprintf(hint, sizeof(hint),
-                                 "traits check call sites statically; call the method on a concrete struct value instead (dynamic dispatch is out of scope per RFC-generics \u00a712.4)");
-                        semantic_error_at_hint(ctx, node->line, node->column, message, hint);
+                    if (recv_tp_idx >= 0) {
+                        /* Visit args first so concrete argument types
+                         * exist for the compatibility check below. */
+                        for (int i = 0; i < mc->arg_count; i++) {
+                            semantic_infer_expression(ctx, mc->args[i]);
+                        }
+                        /* Dispatch rides FN-LEVEL constraints only:
+                         * codegen adds hidden dictionary parameters to
+                         * generic fns, and impl type parameters carry no
+                         * constraints in the current grammar. */
+                        const char* con = recv_tp_idx < ctx->cur_fn_tp_count
+                            ? (ctx->cur_fn_tp_constraints
+                               ? ctx->cur_fn_tp_constraints[recv_tp_idx] : NULL)
+                            : NULL;
+                        ASTTraitDecl* td = NULL;
+                        if (con && lamo_constraint_kind(con) < 0) {
+                            td = find_trait_def(ctx, con);
+                        }
+                        if (!td) {
+                            /* Non-dispatchable receiver: keep the honest
+                             * diagnostics, with constraint-aware wording. */
+                            char message[320];
+                            char hint[240];
+                            if (con && lamo_constraint_kind(con) > 0) {
+                                snprintf(message, sizeof(message),
+                                         "cannot call method '%s' on a value of constrained type parameter '%s' (built-in constraint '%s' carries no methods)",
+                                         mc->member_name, recv_full, con);
+                                snprintf(hint, sizeof(hint),
+                                         "built-in constraints catalogue structural properties (Eq, Ord, Num, ...), not methods; declare a trait with the method and constrain '%s' with it",
+                                         recv_full);
+                            } else if (con) {
+                                /* Unknown constraint name — already a
+                                 * declaration-site error; don't double-
+                                 * report the name, keep the generic note. */
+                                snprintf(message, sizeof(message),
+                                         "cannot call method '%s' on a type-parameter value ('%s' is a generic parameter here)",
+                                         mc->member_name, recv_full);
+                                snprintf(hint, sizeof(hint),
+                                         "constrain '%s' with a declared trait to dispatch through it",
+                                         recv_full);
+                            } else {
+                                snprintf(message, sizeof(message),
+                                         "cannot call method '%s' on a type-parameter value ('%s' is an unconstrained generic parameter; generics are erased at compile time)",
+                                         mc->member_name, recv_full);
+                                snprintf(hint, sizeof(hint),
+                                         "constrain '%s' with a declared trait (e.g. `fn f<%s: Shape>(...)`) to dispatch through the trait's methods",
+                                         recv_full, recv_full);
+                            }
+                            semantic_error_at_hint(ctx, node->line, node->column, message, hint);
+                            return LAMO_TYPE_UNKNOWN;
+                        }
+                        /* Find the method signature in the trait. */
+                        ASTFnDecl* sig = NULL;
+                        for (ASTNode* m = td->methods; m; m = m->next) {
+                            if (m->type == AST_FN_DECL &&
+                                strcmp(((ASTFnDecl*)m)->name, mc->member_name) == 0) {
+                                sig = (ASTFnDecl*)m;
+                                break;
+                            }
+                        }
+                        if (!sig) {
+                            char message[320];
+                            char hint[240];
+                            snprintf(message, sizeof(message),
+                                     "trait '%s' (constraint of type parameter '%s') has no method '%s'",
+                                     td->name, recv_full, mc->member_name);
+                            snprintf(hint, sizeof(hint),
+                                     "declare `fn %s` in the trait, or call a method the trait provides",
+                                     mc->member_name);
+                            semantic_error_at_hint(ctx, node->line, node->column, message, hint);
+                            return LAMO_TYPE_UNKNOWN;
+                        }
+                        if (sig->param_count != mc->arg_count) {
+                            char message[320];
+                            snprintf(message, sizeof(message),
+                                     "method '%s.%s' (trait '%s') expects %d argument(s), got %d",
+                                     recv_full, mc->member_name, td->name,
+                                     sig->param_count, mc->arg_count);
+                            semantic_error_at(ctx, node->line, node->column, message);
+                            return LAMO_TYPE_UNKNOWN;
+                        }
+                        /* Argument compatibility where BOTH sides
+                         * annotate: the trait signature's annotation
+                         * against the argument's concrete full type.
+                         * Arguments that are themselves type parameters
+                         * are unresolvable here and skipped. */
+                        for (int i = 0; i < mc->arg_count; i++) {
+                            const char* raw_ann = sig->param_types ? sig->param_types[i] : NULL;
+                            if (!raw_ann) continue;
+                            const char* actual = arg_concrete_full_type(ctx, mc->args[i]);
+                            if (!actual) continue;
+                            int arg_is_tp = 0;
+                            for (int t = 0; t < ctx->cur_fn_tp_count; t++) {
+                                if (strcmp(actual, ctx->cur_fn_tp_names[t]) == 0) { arg_is_tp = 1; break; }
+                            }
+                            if (arg_is_tp) continue;
+                            char* ann_norm = semantic_normalize_type(raw_ann);
+                            const char* ann_interned = lamo_intern_type(ann_norm);
+                            LamoType ann_base = annotation_to_type_with_ctx(ctx, ann_norm);
+                            LamoType arg_base = semantic_infer_expression(ctx, mc->args[i]);
+                            if (!call_types_compatible(ann_interned, ann_base,
+                                                       actual, arg_base)) {
+                                char message[320];
+                                snprintf(message, sizeof(message),
+                                         "argument %d to '%s.%s' (trait '%s'): expected type '%s', got '%s'",
+                                         i + 1, recv_full, mc->member_name,
+                                         td->name, ann_interned, actual);
+                                semantic_error_at(ctx, node->line, node->column, message);
+                            }
+                            free(ann_norm);
+                        }
+                        /* Stamp the dispatch so codegen routes through
+                         * the hidden dictionary parameter. */
+                        node->sema_trait_name = td->name;
+                        node->sema_tp_receiver = ctx->cur_fn_tp_names[recv_tp_idx];
+                        /* Trait return annotation flows into the call's
+                         * full type (traits are non-generic, so there is
+                         * nothing to substitute). */
+                        if (sig->return_type_annotation) {
+                            char* ret_norm = semantic_normalize_type(sig->return_type_annotation);
+                            node->sema_full_type = lamo_intern_type(ret_norm);
+                            LamoType ret_base = annotation_to_type_with_ctx(ctx, ret_norm);
+                            free(ret_norm);
+                            return ret_base;
+                        }
+                        return LAMO_TYPE_UNKNOWN;
                     }
                 }
             }
@@ -4223,6 +4519,14 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
             /* Case 1: array.len (existing behavior). */
             if (obj_type == LAMO_TYPE_ARRAY || (obj_type == LAMO_TYPE_UNKNOWN && !obj_struct_name)) {
                 if (strcmp(pe->prop_name, "len") == 0) {
+                    /* 2.10.0 (FU-vmc): route marker for codegen — the
+                     * same `sema_full_type == "array"` convention member
+                     * calls already use. Chained receivers (`self.items.len`,
+                     * `b.items.len`) carry a struct tag on the object from
+                     * the inner field access; without this stamp codegen
+                     * takes the struct-field route and emits the defensive
+                     * lamo_make_int(0) fallback. */
+                    node->sema_full_type = lamo_intern_type("array");
                     return LAMO_TYPE_INT;
                 }
                 /* Unknown property on an array/unknown-typed value. If the

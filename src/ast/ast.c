@@ -421,6 +421,23 @@ ASTNode* ast_new_trait_decl(char* name, ASTNode* methods, int line, int column) 
     return (ASTNode*)node;
 }
 
+/* 2.10.0 trait dictionary dispatch: allocate the hidden-argument list
+ * stamped on call sites. Process-lifetime allocation (never freed —
+ * same policy as the semantic intern table; the compiler is short-
+ * lived). Returns NULL for count <= 0. */
+SemaTraitDictList* ast_new_trait_dict_list(int count) {
+    SemaTraitDictList* list;
+    if (count <= 0) return NULL;
+    list = malloc(sizeof(SemaTraitDictList) + sizeof(*list->items) * (size_t)count);
+    if (!list) {
+        perror("Failed to allocate trait dictionary list");
+        exit(EXIT_FAILURE);
+    }
+    list->count = count;
+    memset(list->items, 0, sizeof(*list->items) * (size_t)count);
+    return list;
+}
+
 /* 2.6.0 shared body of the enum constructors. All strings/arrays passed
  * in are strdup'd/copied here (NULL entries in payload lists allowed). */
 static ASTNode* ast_new_enum_decl_impl(char* name, char** variants, int variant_count,

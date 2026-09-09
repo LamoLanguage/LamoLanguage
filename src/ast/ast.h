@@ -120,6 +120,37 @@ typedef struct ASTNode {
      * sema_enum_name NULL means the call is a regular function call. */
     const char* sema_enum_name;
     int sema_variant_index;
+    /* ── 2.10.0 trait dictionary dispatch (static per call site) ──
+     * Generics compile ONCE under erasure, so a method call on a bare
+     * type-parameter receiver (`s.area()` inside `fn draw<T: Shape>`)
+     * cannot resolve through the receiver's concrete struct name. The
+     * semantic pass instead routes such calls through a DICTIONARY —
+     * a generated struct of function pointers, one per trait method —
+     * passed as a HIDDEN trailing parameter to the enclosing generic
+     * fn. No runtime type tags, no vtables: the concrete dictionary is
+     * known at every call site (RFC-generics §12.4 dispatch stays
+     * static).
+     *
+     * sema_trait_name  — on AST_MEMBER_CALL: the trait owning the method
+     *                    dispatched on a type-parameter receiver. NULL
+     *                    for every other member call.
+     * sema_tp_receiver — on AST_MEMBER_CALL: the receiver's type-
+     *                    parameter name ("T"); codegen emits
+     *                    `_dict_<T>->method(...)`. NULL otherwise.
+     * sema_trait_dicts — on AST_CALL_EXPR / AST_CALL_STMT: the hidden
+     *                    dictionary arguments for a call to a
+     *                    trait-constrained generic fn, one entry per
+     *                    trait-constrained type parameter, in the fn's
+     *                    type-parameter order. `target` is either a
+     *                    concrete struct name (build the static dict
+     *                    instance `lamo_dict_<Trait>_<Struct>`) or a
+     *                    type-parameter name of the ENCLOSING fn
+     *                    (forward the enclosing fn's own hidden dict).
+     *                    Allocated by the semantic pass, process-
+     *                    lifetime (same policy as the intern table). */
+    const char* sema_trait_name;
+    const char* sema_tp_receiver;
+    struct SemaTraitDictList* sema_trait_dicts;
     /* 2.6.0 (FU5): explicit export marker — `pub fn ...`, `pub let ...`,
      * `pub struct ...`, `pub impl ...`, `pub enum ...` at top level.
      * Contextual keyword (never reserved). Recorded per declaration and
@@ -415,6 +446,26 @@ typedef struct {
     char* name;
     struct ASTNode* methods;   /* AST_FN_DECL chain, body == NULL */
 } ASTTraitDecl;
+
+/* 2.10.0 trait dictionary dispatch: hidden-argument list stamped on
+ * call sites by the semantic pass (see the ASTNode field comment for
+ * the full contract). */
+typedef struct SemaTraitDictList {
+    int count;
+    struct {
+        const char* trait_name;   /* borrowed (trait decl name) */
+        const char* target;       /* borrowed: struct name or enclosing
+                                   * fn's type-parameter name */
+        int forwards;             /* 1 = target is the ENCLOSING fn's
+                                   * type parameter (forward its hidden
+                                   * dictionary); 0 = concrete struct
+                                   * (build the static instance) */
+    } items[];
+} SemaTraitDictList;
+
+/* 2.10.0: allocate a dict list for a call node (count may be 0 — the
+ * allocation only happens when count > 0). Returns NULL for count <= 0. */
+SemaTraitDictList* ast_new_trait_dict_list(int count);
 
 /* Phase 2: enum declaration.
  *   enum Color { Red; Green; Blue; }

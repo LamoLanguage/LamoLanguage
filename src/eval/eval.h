@@ -27,11 +27,33 @@ typedef enum {
     EVAL_VAL_STRING,
     EVAL_VAL_BOOL,
     EVAL_VAL_ENUM,    /* 2.8.0 (FU1): tagged-union enum value (SPEC §3.5) */
+    EVAL_VAL_ARRAY,   /* 2.10.0 (FU-vmc): array value (SPEC §3.4) */
+    EVAL_VAL_STRUCT,  /* 2.10.0 (FU-vmc): struct instance (SPEC §3.3) */
     EVAL_VAL_VOID,    /* result of a statement or a bare return; */
     EVAL_VAL_ERROR    /* propagated runtime error sentinel */
 } EvalValueType;
 
+/* 2.10.0 (FU-vmc): heap objects for the reference-style value kinds.
+ * The C backend represents arrays and structs as POINTERS (LamoArray*),
+ * so `let b = a;` aliases and mutations through one binding are visible
+ * through the other (SPEC §3.4 runtime model). The interpreter mirrors
+ * that with refcounted shared objects: eval_value_clone() bumps the
+ * refcount (shares the object), eval_value_free() drops it. */
 typedef struct EvalValue EvalValue;
+
+typedef struct {
+    int refcount;
+    EvalValue* items;    /* owned; each element freed by the final unref */
+    int count;
+} EvalArrayObj;
+
+typedef struct {
+    int refcount;
+    char* struct_name;         /* owned strdup (bare name, no <...>) */
+    char** field_names;        /* owned strdups, field_count entries */
+    EvalValue* fields;         /* owned values, aligned with field_names */
+    int field_count;
+} EvalStructObj;
 
 struct EvalValue {
     EvalValueType type;
@@ -50,6 +72,8 @@ struct EvalValue {
             EvalValue*   payloads;      /* owned array (NULL for unit) */
             int          payload_count;
         } e;
+        EvalArrayObj*  arr;    /* EVAL_VAL_ARRAY — shared, refcounted */
+        EvalStructObj* strct;  /* EVAL_VAL_STRUCT — shared, refcounted */
     } as;
 };
 
@@ -63,6 +87,10 @@ EvalValue eval_enum(long long tag, const char* variant_name,
                     EvalValue* payloads, int payload_count); /* 2.8.0 (FU1):
                     takes ownership of payloads (may be NULL) and
                     strdup's variant_name */
+/* 2.10.0 (FU-vmc): wrap a NEW refcounted heap object (refcount starts
+ * at 1; the returned EvalValue owns one reference). */
+EvalValue eval_array_take(EvalArrayObj* obj);
+EvalValue eval_struct_take(EvalStructObj* obj);
 EvalValue eval_void(void);
 EvalValue eval_error(void);
 

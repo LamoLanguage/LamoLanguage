@@ -41,6 +41,49 @@ EvalValue eval_enum(long long tag, const char* variant_name,
     return v;
 }
 
+/* ── 2.10.0 (FU-vmc): refcounted heap objects ─────────────────────── */
+
+EvalValue eval_array_take(EvalArrayObj* obj) {
+    EvalValue v;
+    v.type = EVAL_VAL_ARRAY;
+    v.as.arr = obj;
+    return v;
+}
+
+EvalValue eval_struct_take(EvalStructObj* obj) {
+    EvalValue v;
+    v.type = EVAL_VAL_STRUCT;
+    v.as.strct = obj;
+    return v;
+}
+
+void eval_array_obj_unref(EvalArrayObj* obj) {
+    if (!obj) return;
+    if (--obj->refcount > 0) return;
+    if (obj->items) {
+        for (int i = 0; i < obj->count; i++) eval_value_free(obj->items[i]);
+        free(obj->items);
+    }
+    free(obj);
+}
+
+void eval_struct_obj_unref(EvalStructObj* obj) {
+    if (!obj) return;
+    if (--obj->refcount > 0) return;
+    if (obj->struct_name) free(obj->struct_name);
+    if (obj->field_names) {
+        for (int i = 0; i < obj->field_count; i++) {
+            if (obj->field_names[i]) free(obj->field_names[i]);
+        }
+        free(obj->field_names);
+    }
+    if (obj->fields) {
+        for (int i = 0; i < obj->field_count; i++) eval_value_free(obj->fields[i]);
+        free(obj->fields);
+    }
+    free(obj);
+}
+
 void eval_value_free(EvalValue v) {
     if (v.type == EVAL_VAL_STRING && v.as.s) {
         free(v.as.s);
@@ -52,6 +95,10 @@ void eval_value_free(EvalValue v) {
             }
             free(v.as.e.payloads);
         }
+    } else if (v.type == EVAL_VAL_ARRAY) {
+        eval_array_obj_unref(v.as.arr);
+    } else if (v.type == EVAL_VAL_STRUCT) {
+        eval_struct_obj_unref(v.as.strct);
     }
 }
 
@@ -60,6 +107,17 @@ void eval_value_free(EvalValue v) {
  * payloads out of the scrutinee). */
 static EvalValue eval_value_clone(EvalValue v) {
     if (v.type == EVAL_VAL_STRING) return eval_string(v.as.s);
+    if (v.type == EVAL_VAL_ARRAY) {
+        /* Reference semantics (C-backend parity): the clone SHARES the
+         * heap object, exactly like the pointer copy `let b = a;`
+         * compiles to in the transpiled backend. */
+        if (v.as.arr) v.as.arr->refcount++;
+        return v;
+    }
+    if (v.type == EVAL_VAL_STRUCT) {
+        if (v.as.strct) v.as.strct->refcount++;
+        return v;
+    }
     if (v.type == EVAL_VAL_ENUM) {
         EvalValue* payloads = NULL;
         if (v.as.e.payloads) {
@@ -123,6 +181,73 @@ char* eval_value_to_string(EvalValue v) {
             #undef EVAL_APPEND_STR
             return out;
         }
+        case EVAL_VAL_ARRAY: {
+            /* Backend parity: Python-like [a, b, c] form, elements via
+             * their own string representation (lamo_print_value). */
+            size_t cap = 64, len = 0;
+            char* out = malloc(cap);
+            if (!out) return strdup("");
+            out[0] = '\0';
+            #define EVAL_APPEND_STR(s) do { \
+                size_t addlen = strlen(s); \
+                if (len + addlen + 1 > cap) { \
+                    while (len + addlen + 1 > cap) cap *= 2; \
+                    char* grown = realloc(out, cap); \
+                    if (!grown) { free(out); return strdup(""); } \
+                    out = grown; \
+                } \
+                memcpy(out + len, s, addlen); \
+                len += addlen; \
+                out[len] = '\0'; \
+            } while (0)
+            EVAL_APPEND_STR("[");
+            if (v.as.arr) {
+                for (int i = 0; i < v.as.arr->count; i++) {
+                    if (i > 0) EVAL_APPEND_STR(", ");
+                    char* elem = eval_value_to_string(v.as.arr->items[i]);
+                    EVAL_APPEND_STR(elem ? elem : "");
+                    free(elem);
+                }
+            }
+            EVAL_APPEND_STR("]");
+            #undef EVAL_APPEND_STR
+            return out;
+        }
+        case EVAL_VAL_STRUCT: {
+            /* Backend parity: `Name { v0, v1 }` (lamo_print_struct_named
+             * — positional fields, name from the semantic pass; the
+             * interpreter carries the name on the value itself). */
+            size_t cap = 96, len = 0;
+            char* out = malloc(cap);
+            if (!out) return strdup("");
+            out[0] = '\0';
+            #define EVAL_APPEND_STR(s) do { \
+                size_t addlen = strlen(s); \
+                if (len + addlen + 1 > cap) { \
+                    while (len + addlen + 1 > cap) cap *= 2; \
+                    char* grown = realloc(out, cap); \
+                    if (!grown) { free(out); return strdup(""); } \
+                    out = grown; \
+                } \
+                memcpy(out + len, s, addlen); \
+                len += addlen; \
+                out[len] = '\0'; \
+            } while (0)
+            EVAL_APPEND_STR(v.as.strct && v.as.strct->struct_name
+                            ? v.as.strct->struct_name : "struct");
+            EVAL_APPEND_STR(" { ");
+            if (v.as.strct) {
+                for (int i = 0; i < v.as.strct->field_count; i++) {
+                    if (i > 0) EVAL_APPEND_STR(", ");
+                    char* elem = eval_value_to_string(v.as.strct->fields[i]);
+                    EVAL_APPEND_STR(elem ? elem : "");
+                    free(elem);
+                }
+            }
+            EVAL_APPEND_STR(" }");
+            #undef EVAL_APPEND_STR
+            return out;
+        }
         case EVAL_VAL_VOID:
             return strdup("");
         case EVAL_VAL_ERROR:
@@ -138,6 +263,16 @@ char* eval_value_to_string(EvalValue v) {
  * coercion otherwise (bools included) — mixed kinds simply are not
  * equal (no error), matching the backend. */
 static int eval_values_equal(EvalValue l, EvalValue r) {
+    /* 2.10.0 (FU-vmc): arrays and structs compare by IDENTITY (same
+     * heap object), mirroring lamo_equal in the C runtime — deep
+     * equality would be expensive and surprising for mutable values. */
+    if (l.type == EVAL_VAL_ARRAY || l.type == EVAL_VAL_STRUCT ||
+        r.type == EVAL_VAL_ARRAY || r.type == EVAL_VAL_STRUCT) {
+        if (l.type != r.type) return 0;
+        if (l.type == EVAL_VAL_ARRAY)
+            return l.as.arr == r.as.arr;
+        return l.as.strct == r.as.strct;
+    }
     if (l.type == EVAL_VAL_ENUM || r.type == EVAL_VAL_ENUM) {
         if (l.type != r.type) return 0;
         if (l.as.e.tag != r.as.e.tag) return 0;
@@ -316,6 +451,142 @@ static const char* eval_variant_short_name(const char* name) {
     return out;
 }
 
+/* ── 2.10.0 (FU-vmc): struct + impl registries ─────────────────────
+ * The interpreter needs its own picture of every declared struct and
+ * impl block to (a) size struct literals with field defaults, (b)
+ * resolve field indexes for prop access in the REPL (which runs NO
+ * semantic pass and has no sema stamps), and (c) find methods —
+ * inherent AND trait impls alike, keyed on the bare struct name —
+ * which is what makes trait-impl method calls work in eval/REPL.
+ * Registration happens whenever an AST_STRUCT_DECL / AST_IMPL_DECL
+ * executes (program pre-pass, statement flow, module loads alike);
+ * re-declaration in a REPL session replaces the previous entry and
+ * method lookup follows the same "later wins" rule as the compiler. */
+#define EVAL_MAX_STRUCTS 128
+#define EVAL_MAX_IMPLS 128
+#define EVAL_MAX_FIELDS 64
+
+typedef struct {
+    char* name;                                    /* owned, bare name */
+    char* field_names[EVAL_MAX_FIELDS];            /* owned strdups */
+    int   field_count;
+} EvalStructEntry;
+static EvalStructEntry eval_struct_table[EVAL_MAX_STRUCTS];
+static int eval_struct_table_count = 0;
+
+typedef struct {
+    char* struct_name;      /* owned, bare name */
+    ASTNode* methods;       /* NOT owned — the AST owns the method chain */
+} EvalImplEntry;
+static EvalImplEntry eval_impl_table[EVAL_MAX_IMPLS];
+static int eval_impl_table_count = 0;
+
+/* Strip a trailing `<...>` type-argument list: `Stack<int>` → `Stack`.
+ * Returns a pointer into a 4-slot static ring (borrowed). */
+static const char* eval_struct_bare_name(const char* name) {
+    static char bufs[4][128];
+    static int ring = 0;
+    char* out = bufs[ring];
+    ring = (ring + 1) & 3;
+    if (!name) { out[0] = '\0'; return out; }
+    const char* lt = strchr(name, '<');
+    size_t n = lt ? (size_t)(lt - name) : strlen(name);
+    if (n >= 128) n = 127;
+    memcpy(out, name, n);
+    out[n] = '\0';
+    return out;
+}
+
+static void eval_register_struct_decl(ASTStructDecl* sd) {
+    if (!sd || !sd->name) return;
+    const char* bare = eval_struct_bare_name(sd->name);
+    /* Re-declaration in a REPL session replaces the previous entry. */
+    for (int i = 0; i < eval_struct_table_count; i++) {
+        if (strcmp(eval_struct_table[i].name, bare) == 0) {
+            for (int f = 0; f < eval_struct_table[i].field_count; f++)
+                free(eval_struct_table[i].field_names[f]);
+            free(eval_struct_table[i].name);
+            for (int j = i; j < eval_struct_table_count - 1; j++)
+                eval_struct_table[j] = eval_struct_table[j + 1];
+            eval_struct_table_count--;
+            break;
+        }
+    }
+    if (eval_struct_table_count >= EVAL_MAX_STRUCTS) return;  /* defensive cap */
+    EvalStructEntry* slot = &eval_struct_table[eval_struct_table_count++];
+    memset(slot, 0, sizeof(*slot));
+    slot->name = strdup(bare);
+    slot->field_count = sd->field_count > EVAL_MAX_FIELDS
+        ? EVAL_MAX_FIELDS : sd->field_count;
+    for (int f = 0; f < slot->field_count; f++) {
+        slot->field_names[f] = strdup(sd->field_names[f] ? sd->field_names[f] : "");
+    }
+}
+
+static void eval_register_impl_decl(ASTImplDecl* id) {
+    if (!id || !id->struct_name) return;
+    const char* bare = eval_struct_bare_name(id->struct_name);
+    /* 2.10.0 (FU-vmc): impls ACCUMULATE like the compiler's find_method
+     * — every impl block for a struct contributes its methods, so a
+     * trait impl and an inherent impl coexist (and a trait impl may
+     * carry extra inherent methods). Lookup searches newest-first, so
+     * a re-declared method name resolves to the newest impl ("later
+     * wins" per method, compiler parity). */
+    if (eval_impl_table_count >= EVAL_MAX_IMPLS) return;  /* defensive cap */
+    EvalImplEntry* slot = &eval_impl_table[eval_impl_table_count++];
+    slot->struct_name = strdup(bare);
+    slot->methods = id->methods;
+}
+
+/* Field index by name (declaration order). -1 when unknown. */
+static int eval_struct_field_index(const char* struct_name, const char* field) {
+    if (!struct_name || !field) return -1;
+    for (int i = eval_struct_table_count - 1; i >= 0; i--) {
+        if (strcmp(eval_struct_table[i].name, struct_name) == 0) {
+            for (int f = 0; f < eval_struct_table[i].field_count; f++) {
+                if (strcmp(eval_struct_table[i].field_names[f], field) == 0) return f;
+            }
+            return -1;
+        }
+    }
+    return -1;
+}
+
+/* Method lookup by (bare) struct name + method name. Searches every
+ * registered impl NEWEST-FIRST — inherent and trait impls alike, so
+ * trait-impl dispatch rides the same table, and a method re-declared
+ * in a newer impl wins (compiler parity: find_method accumulation +
+ * REPL re-declaration "later wins"). Returns NULL when absent. */
+static ASTFnDecl* eval_find_method(const char* struct_name, const char* method) {
+    if (!struct_name || !method) return NULL;
+    for (int i = eval_impl_table_count - 1; i >= 0; i--) {
+        if (strcmp(eval_impl_table[i].struct_name, struct_name) == 0) {
+            for (ASTNode* m = eval_impl_table[i].methods; m; m = m->next) {
+                if (m->type == AST_FN_DECL &&
+                    strcmp(((ASTFnDecl*)m)->name, method) == 0) {
+                    return (ASTFnDecl*)m;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+/* ── Truthiness (SPEC §6.3 parity with lamo_is_truthy) ────────────── */
+
+static int eval_is_truthy(EvalValue v) {
+    switch (v.type) {
+        case EVAL_VAL_BOOL:   return v.as.b != 0;
+        case EVAL_VAL_INT:    return v.as.i != 0;
+        case EVAL_VAL_FLOAT:  return v.as.f != 0.0;
+        case EVAL_VAL_STRING: return v.as.s && v.as.s[0] != '\0';
+        case EVAL_VAL_ENUM:   return 1;  /* enums always truthy (runtime parity) */
+        case EVAL_VAL_ARRAY:  return v.as.arr != NULL && v.as.arr->count > 0;
+        case EVAL_VAL_STRUCT: return v.as.strct != NULL;  /* always truthy */
+        default:              return 0;
+    }
+}
+
 /* ── Environment ─────────────────────────────────────────────────────── */
 
 typedef struct EvalBinding {
@@ -451,6 +722,12 @@ static EvalValue eval_block(ASTBlock* block, EvalEnv* env, EvalSignal* sig);
 static EvalValue eval_call(const char* name, ASTNode** args, int argc,
                             EvalEnv* env, EvalSignal* sig, int line);
 
+/* 2.10.0 (FU-vmc): call a fn decl with an optional `self` binding in
+ * the frame (methods pass the receiver; plain fns pass has_self=0). */
+static EvalValue eval_call_fn(ASTFnDecl* fn, EvalValue self_val, int has_self,
+                              EvalValue* argv, int argc,
+                              EvalEnv* env, EvalSignal* sig, const char* name);
+
 /* 2.8.0 (FU1) — enum + match machinery (defined below). */
 static EvalValue eval_enum_ctor_call(long long tag, const char* display_name,
                                      ASTNode** args, int argc,
@@ -513,12 +790,7 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
                 *sig = EVAL_SIG_ERROR; return eval_error();
             }
             if (u->operator == TOKEN_BANG) {
-                int truthy = (right.type == EVAL_VAL_BOOL) ? right.as.b
-                           : (right.type == EVAL_VAL_INT)  ? (right.as.i != 0)
-                           : (right.type == EVAL_VAL_FLOAT)? (right.as.f != 0.0)
-                           : (right.type == EVAL_VAL_STRING)? (right.as.s && right.as.s[0] != '\0')
-                           : (right.type == EVAL_VAL_ENUM) ? 1  /* enums always truthy (runtime parity) */
-                           : 0;
+                int truthy = eval_is_truthy(right);
                 eval_value_free(right);
                 return eval_bool(!truthy);
             }
@@ -667,6 +939,27 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
                 eval_value_free(obj);
                 return eval_string(ch);
             }
+            /* 2.10.0 (FU-vmc): array index — negative indexes wrap
+             * Python-like; out-of-bounds mirrors the C runtime's message
+             * and hard-exit behavior. */
+            if (obj.type == EVAL_VAL_ARRAY && index.type == EVAL_VAL_INT) {
+                EvalArrayObj* arr = obj.as.arr;
+                long long idx = index.as.i;
+                long long count = arr ? arr->count : 0;
+                if (idx < 0) idx += count;
+                if (!arr || idx < 0 || idx >= count) {
+                    RUNTIME_ERROR("array index %lld out of bounds (array length %lld)",
+                                  idx, count);
+                    eval_value_free(obj);
+                    eval_value_free(index);
+                    *sig = EVAL_SIG_ERROR;
+                    return eval_error();
+                }
+                EvalValue out = eval_value_clone(arr->items[idx]);
+                eval_value_free(obj);
+                eval_value_free(index);
+                return out;
+            }
             RUNTIME_ERROR("index operation not supported on this type");
             eval_value_free(obj); eval_value_free(index);
             *sig = EVAL_SIG_ERROR;
@@ -701,6 +994,36 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
                 eval_value_free(obj);
                 return eval_int(len);
             }
+            /* 2.10.0 (FU-vmc): array `.len` (backend parity:
+             * lamo_array_len). */
+            if (obj.type == EVAL_VAL_ARRAY && strcmp(pe->prop_name, "len") == 0) {
+                long long len = obj.as.arr ? obj.as.arr->count : 0;
+                eval_value_free(obj);
+                return eval_int(len);
+            }
+            /* 2.10.0 (FU-vmc): struct field access. Field names live on
+             * the value itself; the registry backs REPL nodes that were
+             * built without a semantic pass. */
+            if (obj.type == EVAL_VAL_STRUCT && obj.as.strct) {
+                EvalStructObj* so = obj.as.strct;
+                int fidx = -1;
+                for (int f = 0; f < so->field_count; f++) {
+                    if (so->field_names[f] &&
+                        strcmp(so->field_names[f], pe->prop_name) == 0) { fidx = f; break; }
+                }
+                if (fidx < 0 && so->struct_name)
+                    fidx = eval_struct_field_index(so->struct_name, pe->prop_name);
+                if (fidx >= 0 && fidx < so->field_count) {
+                    EvalValue out = eval_value_clone(so->fields[fidx]);
+                    eval_value_free(obj);
+                    return out;
+                }
+                RUNTIME_ERROR("struct '%s' has no field '%s'",
+                              so->struct_name ? so->struct_name : "?", pe->prop_name);
+                eval_value_free(obj);
+                *sig = EVAL_SIG_ERROR;
+                return eval_error();
+            }
             if (pe->object && pe->object->type == AST_IDENTIFIER) {
                 RUNTIME_ERROR("unknown module member or variable `%s.%s` (import the module first, e.g. `import %s.lamo as %s`)",
                               ((ASTIdentifier*)pe->object)->name, pe->prop_name,
@@ -734,10 +1057,108 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
                 if (eval_env_find_fn(env, prefixed, &closure)) {
                     return eval_call(prefixed, mc->args, mc->arg_count, env, sig, node->line);
                 }
-                RUNTIME_ERROR("unknown module member `%s.%s` (did you import it? e.g. `import \"%s.lamo\" as %s;`)",
-                              alias, mc->member_name, alias, alias);
-                *sig = EVAL_SIG_ERROR;
-                return eval_error();
+                /* Fall through to value-method dispatch below (the alias
+                 * may also be a plain variable holding a struct/array —
+                 * the compiler resolves module aliases first, then value
+                 * members). */
+            }
+            /* 2.10.0 (FU-vmc): value method dispatch. Evaluate the
+             * receiver and route by its runtime kind: struct → method
+             * table (inherent AND trait impls), array → push/pop/len. */
+            {
+                EvalValue obj = eval_expression(mc->object, env, sig);
+                if (*sig != EVAL_SIG_NONE) return obj;
+                if (obj.type == EVAL_VAL_STRUCT && obj.as.strct) {
+                    EvalStructObj* so = obj.as.strct;
+                    ASTFnDecl* method = eval_find_method(so->struct_name, mc->member_name);
+                    if (!method) {
+                        RUNTIME_ERROR("struct '%s' has no method '%s'",
+                                      so->struct_name ? so->struct_name : "?",
+                                      mc->member_name);
+                        eval_value_free(obj);
+                        *sig = EVAL_SIG_ERROR;
+                        return eval_error();
+                    }
+                    if (method->param_count != mc->arg_count) {
+                        RUNTIME_ERROR("method '%s.%s' expects %d argument(s), got %d",
+                                      so->struct_name ? so->struct_name : "?",
+                                      mc->member_name, method->param_count, mc->arg_count);
+                        eval_value_free(obj);
+                        *sig = EVAL_SIG_ERROR;
+                        return eval_error();
+                    }
+                    EvalValue* argv = mc->arg_count > 0
+                        ? malloc(sizeof(EvalValue) * (size_t)mc->arg_count) : NULL;
+                    if (mc->arg_count > 0 && !argv) { perror("eval member call"); exit(1); }
+                    for (int i = 0; i < mc->arg_count; i++) {
+                        argv[i] = eval_expression(mc->args[i], env, sig);
+                        if (*sig != EVAL_SIG_NONE) {
+                            for (int j = 0; j < i; j++) eval_value_free(argv[j]);
+                            free(argv);
+                            eval_value_free(obj);
+                            return eval_error();
+                        }
+                    }
+                    /* obj stays owned by this scope; the frame clones
+                     * `self` (shared refcount for structs). eval_call_fn
+                     * takes ownership of argv (and frees it). */
+                    EvalValue result = eval_call_fn(method, obj, 1, argv, mc->arg_count,
+                                                    env, sig, mc->member_name);
+                    eval_value_free(obj);
+                    return result;
+                }
+                if (obj.type == EVAL_VAL_ARRAY) {
+                    EvalArrayObj* arr = obj.as.arr;
+                    if (strcmp(mc->member_name, "push") == 0) {
+                        if (mc->arg_count != 1) {
+                            RUNTIME_ERROR("array method `push` expects 1 argument, got %d",
+                                          mc->arg_count);
+                            eval_value_free(obj);
+                            *sig = EVAL_SIG_ERROR;
+                            return eval_error();
+                        }
+                        EvalValue item = eval_expression(mc->args[0], env, sig);
+                        if (*sig != EVAL_SIG_NONE) { eval_value_free(obj); eval_value_free(item); return eval_error(); }
+                        if (arr) {
+                            arr->items = realloc(arr->items, sizeof(EvalValue) * (size_t)(arr->count + 1));
+                            if (!arr->items) { perror("array push"); exit(1); }
+                            arr->items[arr->count++] = item;  /* takes ownership */
+                        } else {
+                            eval_value_free(item);
+                        }
+                        eval_value_free(obj);
+                        return eval_void();
+                    }
+                    if (strcmp(mc->member_name, "pop") == 0) {
+                        if (mc->arg_count != 0) {
+                            RUNTIME_ERROR("array method `pop` expects 0 arguments, got %d",
+                                          mc->arg_count);
+                            eval_value_free(obj);
+                            *sig = EVAL_SIG_ERROR;
+                            return eval_error();
+                        }
+                        if (!arr || arr->count == 0) {
+                            RUNTIME_ERROR("pop from empty array");
+                            eval_value_free(obj);
+                            *sig = EVAL_SIG_ERROR;
+                            return eval_error();
+                        }
+                        EvalValue item = arr->items[--arr->count];  /* moves out */
+                        eval_value_free(obj);
+                        return item;
+                    }
+                    if (strcmp(mc->member_name, "len") == 0) {
+                        long long n = arr ? arr->count : 0;
+                        eval_value_free(obj);
+                        return eval_int(n);
+                    }
+                    RUNTIME_ERROR("array has no method '%s' (valid: push, pop, len)",
+                                  mc->member_name);
+                    eval_value_free(obj);
+                    *sig = EVAL_SIG_ERROR;
+                    return eval_error();
+                }
+                eval_value_free(obj);
             }
             {
                 const char* alias = (mc->object && mc->object->type == AST_IDENTIFIER)
@@ -787,10 +1208,98 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
         }
 
         case AST_ARRAY_LITERAL: {
-            /* Arrays are not natively representable in EvalValue yet.
-             * Return a void placeholder so programs compile without crashing.
-             * TODO: add EVAL_VAL_ARRAY with a dynamic EvalValue[]. */
-            return eval_void();
+            /* 2.10.0 (FU-vmc): array literal → refcounted EVAL_VAL_ARRAY.
+             * The object takes ownership of the evaluated elements. */
+            ASTArrayLiteral* al = (ASTArrayLiteral*)node;
+            EvalArrayObj* arr = malloc(sizeof(EvalArrayObj));
+            if (!arr) { perror("eval array literal"); exit(1); }
+            arr->refcount = 1;
+            arr->count = al->element_count;
+            arr->items = al->element_count > 0
+                ? malloc(sizeof(EvalValue) * (size_t)al->element_count) : NULL;
+            if (al->element_count > 0 && !arr->items) { perror("eval array literal"); exit(1); }
+            for (int i = 0; i < al->element_count; i++) {
+                arr->items[i] = eval_expression(al->elements[i], env, sig);
+                if (*sig != EVAL_SIG_NONE) {
+                    arr->count = i;  /* only i elements are initialized */
+                    EvalValue partial = eval_array_take(arr);
+                    eval_value_free(partial);
+                    return eval_error();
+                }
+            }
+            return eval_array_take(arr);
+        }
+
+        case AST_STRUCT_LITERAL: {
+            /* 2.10.0 (FU-vmc): struct literal → refcounted
+             * EVAL_VAL_STRUCT. Missing fields default to int 0 (backend
+             * parity with lamo_struct_alloc); provided fields are placed
+             * by DECLARATION index (codegen parity), so field order in
+             * the literal is irrelevant but names must be declared. */
+            ASTStructLiteral* sl = (ASTStructLiteral*)node;
+            const char* bare = eval_struct_bare_name(sl->struct_name);
+            EvalStructEntry* se = NULL;
+            for (int i = eval_struct_table_count - 1; i >= 0; i--) {
+                if (strcmp(eval_struct_table[i].name, bare) == 0) { se = &eval_struct_table[i]; break; }
+            }
+            EvalStructObj* so = malloc(sizeof(EvalStructObj));
+            if (!so) { perror("eval struct literal"); exit(1); }
+            so->refcount = 1;
+            so->struct_name = strdup(bare);
+            so->field_count = se ? se->field_count : 0;
+            so->field_names = malloc(sizeof(char*) * (size_t)(so->field_count > 0 ? so->field_count : 1));
+            so->fields = malloc(sizeof(EvalValue) * (size_t)(so->field_count > 0 ? so->field_count : 1));
+            if (!so->field_names || !so->fields) { perror("eval struct literal"); exit(1); }
+            for (int f = 0; f < so->field_count; f++) {
+                so->field_names[f] = strdup(se->field_names[f]);
+                so->fields[f] = eval_int(0);  /* default (backend parity) */
+            }
+            /* Evaluate provided values first (element order parity with
+             * the compiler: literal values evaluate in literal order),
+             * then place by declared index. */
+            EvalValue* provided = sl->field_count > 0
+                ? malloc(sizeof(EvalValue) * (size_t)sl->field_count) : NULL;
+            if (sl->field_count > 0 && !provided) { perror("eval struct literal"); exit(1); }
+            int* slots = sl->field_count > 0
+                ? malloc(sizeof(int) * (size_t)sl->field_count) : NULL;
+            if (sl->field_count > 0 && !slots) { perror("eval struct literal"); exit(1); }
+            for (int i = 0; i < sl->field_count; i++) {
+                provided[i] = eval_expression(sl->field_values[i], env, sig);
+                if (*sig != EVAL_SIG_NONE) {
+                    for (int j = 0; j < i; j++) eval_value_free(provided[j]);
+                    free(provided); free(slots);
+                    EvalValue partial = eval_struct_take(so);
+                    eval_value_free(partial);
+                    return eval_error();
+                }
+                const char* fname = sl->field_names[i] ? sl->field_names[i] : "";
+                int fidx = -1;
+                for (int f = 0; f < so->field_count; f++) {
+                    if (strcmp(so->field_names[f], fname) == 0) { fidx = f; break; }
+                }
+                if (fidx < 0) {
+                    /* Unknown field: the semantic pass rejects this;
+                     * REPL defensiveness mirrors struct_get's fallback. */
+                    fidx = 0;
+                    if (so->field_count == 0) {
+                        RUNTIME_ERROR("struct '%s' has no field '%s'", bare, fname);
+                        for (int j = 0; j <= i; j++) eval_value_free(provided[j]);
+                        free(provided); free(slots);
+                        EvalValue partial = eval_struct_take(so);
+                        eval_value_free(partial);
+                        *sig = EVAL_SIG_ERROR;
+                        return eval_error();
+                    }
+                }
+                slots[i] = fidx;
+            }
+            for (int i = 0; i < sl->field_count; i++) {
+                eval_value_free(so->fields[slots[i]]);
+                so->fields[slots[i]] = provided[i];  /* moves in */
+            }
+            free(provided);
+            free(slots);
+            return eval_struct_take(so);
         }
 
         case AST_MATCH_STMT: {
@@ -958,11 +1467,7 @@ static EvalValue eval_match_value(ASTMatchStmt* ms, EvalEnv* env,
                 eval_value_free(scrut);
                 return eval_error();
             }
-            int truthy = (g.type == EVAL_VAL_BOOL)   ? g.as.b :
-                         (g.type == EVAL_VAL_INT)    ? (g.as.i != 0) :
-                         (g.type == EVAL_VAL_FLOAT)  ? (g.as.f != 0.0) :
-                         (g.type == EVAL_VAL_STRING) ? (g.as.s && g.as.s[0]) :
-                         (g.type == EVAL_VAL_ENUM)   ? 1 : 0;
+            int truthy = eval_is_truthy(g);
             eval_value_free(g);
             matched = truthy;
         }
@@ -1040,7 +1545,47 @@ static EvalValue eval_builtin(const char* name, EvalValue* argv, int argc,
     if (strcmp(name, "len") == 0 && argc == 1) {
         if (argv[0].type == EVAL_VAL_STRING)
             return eval_int((long long)strlen(argv[0].as.s));
+        /* 2.10.0 (FU-vmc): array length (backend parity). */
+        if (argv[0].type == EVAL_VAL_ARRAY)
+            return eval_int(argv[0].as.arr ? argv[0].as.arr->count : 0);
         return eval_int(0);
+    }
+
+    /* 2.10.0 (FU-vmc): type predicates gain isarray (backend parity:
+     * lamo_is_array). */
+    if (strcmp(name, "isarray") == 0 && argc == 1) {
+        return eval_bool(argv[0].type == EVAL_VAL_ARRAY);
+    }
+
+    /* 2.10.0 (FU-vmc): global array builtins (SPEC §8: push(arr, x) /
+     * pop(arr) are the function forms of arr.push(x) / arr.pop()).
+     * `append` is a legacy alias of push. Mutation happens on the
+     * SHARED heap object, mirroring the pointer-based backend. */
+    if ((strcmp(name, "push") == 0 || strcmp(name, "append") == 0) && argc == 2) {
+        if (argv[0].type != EVAL_VAL_ARRAY || !argv[0].as.arr) {
+            RUNTIME_ERROR("push expects an array as its first argument");
+            *sig = EVAL_SIG_ERROR;
+            return eval_error();
+        }
+        EvalArrayObj* arr = argv[0].as.arr;
+        arr->items = realloc(arr->items, sizeof(EvalValue) * (size_t)(arr->count + 1));
+        if (!arr->items) { perror("push"); exit(1); }
+        arr->items[arr->count++] = argv[1];  /* takes ownership */
+        return eval_void();
+    }
+    if (strcmp(name, "pop") == 0 && argc == 1) {
+        if (argv[0].type != EVAL_VAL_ARRAY || !argv[0].as.arr) {
+            RUNTIME_ERROR("pop expects an array as its first argument");
+            *sig = EVAL_SIG_ERROR;
+            return eval_error();
+        }
+        EvalArrayObj* arr = argv[0].as.arr;
+        if (arr->count == 0) {
+            RUNTIME_ERROR("pop from empty array");
+            *sig = EVAL_SIG_ERROR;
+            return eval_error();
+        }
+        return arr->items[--arr->count];  /* moves out */
     }
 
     if (strcmp(name, "input") == 0) {
@@ -1088,10 +1633,21 @@ static EvalValue eval_builtin(const char* name, EvalValue* argv, int argc,
         return eval_void();
     }
 
-    /* push/pop/append for arrays — no-op for now */
+    /* push/pop/append for arrays — handled above when the arity
+     * matches; array() with 0 args mirrors the backend's empty array. */
+    if (strcmp(name, "array") == 0 && argc == 0) {
+        EvalArrayObj* arr = malloc(sizeof(EvalArrayObj));
+        if (!arr) { perror("array"); exit(1); }
+        arr->refcount = 1;
+        arr->items = NULL;
+        arr->count = 0;
+        return eval_array_take(arr);
+    }
     if (strcmp(name, "push") == 0 || strcmp(name, "pop") == 0 ||
-        strcmp(name, "append") == 0 || strcmp(name, "array") == 0) {
-        return eval_void();
+        strcmp(name, "append") == 0) {
+        RUNTIME_ERROR("%s expects an array argument", name);
+        *sig = EVAL_SIG_ERROR;
+        return eval_error();
     }
 
     RUNTIME_ERROR("call to unknown function '%s'", name);
@@ -1150,28 +1706,7 @@ static EvalValue eval_call(const char* name, ASTNode** args, int argc,
             *sig = EVAL_SIG_ERROR;
             return eval_error();
         }
-        EvalEnv* frame = eval_env_new(closure ? closure : env);
-        for (int i = 0; i < fn->param_count; i++) {
-            eval_env_define(frame, fn->params[i], argv[i]);
-            /* argv[i] is now owned by frame — don't double-free. */
-        }
-        free(argv);
-
-        EvalSignal inner_sig = EVAL_SIG_NONE;
-        EvalValue result = eval_statement(fn->body, frame, &inner_sig);
-        eval_env_free(frame);
-
-        if (inner_sig == EVAL_SIG_RETURN) {
-            *sig = EVAL_SIG_NONE; /* return is handled — caller sees normal value */
-            return result;
-        }
-        if (inner_sig == EVAL_SIG_ERROR) {
-            *sig = EVAL_SIG_ERROR;
-            eval_value_free(result);
-            return eval_error();
-        }
-        eval_value_free(result);
-        return eval_void();
+        return eval_call_fn(fn, eval_void(), 0, argv, argc, closure ? closure : env, sig, name);
     }
 
     /* Builtin. */
@@ -1180,6 +1715,42 @@ static EvalValue eval_call(const char* name, ASTNode** args, int argc,
     free(argv);
     (void)line;
     return result;
+}
+
+/* 2.10.0 (FU-vmc): shared call machinery. Takes ownership of argv[]
+ * (each entry moves into the new frame). has_self=1 binds `self`
+ * first — the receiver is cloned into the frame (structs share the
+ * refcounted object, so methods mutate the SAME instance the caller
+ * holds, exactly like the compiled backend). */
+static EvalValue eval_call_fn(ASTFnDecl* fn, EvalValue self_val, int has_self,
+                              EvalValue* argv, int argc,
+                              EvalEnv* env, EvalSignal* sig, const char* name) {
+    (void)name;
+    EvalEnv* frame = eval_env_new(env);
+    if (has_self) {
+        eval_env_define(frame, "self", eval_value_clone(self_val));
+    }
+    for (int i = 0; i < argc && i < fn->param_count; i++) {
+        eval_env_define(frame, fn->params[i], argv[i]);
+        /* argv[i] is now owned by frame — don't double-free. */
+    }
+    free(argv);
+
+    EvalSignal inner_sig = EVAL_SIG_NONE;
+    EvalValue result = eval_statement(fn->body, frame, &inner_sig);
+    eval_env_free(frame);
+
+    if (inner_sig == EVAL_SIG_RETURN) {
+        *sig = EVAL_SIG_NONE; /* return is handled — caller sees normal value */
+        return result;
+    }
+    if (inner_sig == EVAL_SIG_ERROR) {
+        *sig = EVAL_SIG_ERROR;
+        eval_value_free(result);
+        return eval_error();
+    }
+    eval_value_free(result);
+    return eval_void();
 }
 
 /* ── Statement evaluator ──────────────────────────────────────────────── */
@@ -1228,6 +1799,179 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
              * globals. */
             eval_register_enum_decl((ASTEnumDecl*)node);
             return eval_void();
+        }
+
+        case AST_STRUCT_DECL: {
+            /* 2.10.0 (FU-vmc): register the struct so literals size
+             * correctly, field lookups work in the REPL, and methods
+             * have a receiver type to key on. */
+            eval_register_struct_decl((ASTStructDecl*)node);
+            return eval_void();
+        }
+
+        case AST_IMPL_DECL: {
+            /* 2.10.0 (FU-vmc): register the impl (inherent OR trait) so
+             * method calls dispatch — trait impls included, which is
+             * what lets trait-impl methods run in eval/REPL. */
+            eval_register_impl_decl((ASTImplDecl*)node);
+            return eval_void();
+        }
+
+        case AST_PLACE_ASSIGN_STMT: {
+            /* 2.10.0 (FU-vmc): `arr[i] = v;` / `obj.field = v;` with
+             * =, +=, -= (codegen parity: direct setter or a
+             * read-modify-write through lamo_add/lamo_sub). The target
+             * expression is evaluated once; the mutation lands on the
+             * SHARED heap object so every alias observes it. */
+            ASTPlaceAssignStmt* pa = (ASTPlaceAssignStmt*)node;
+            int op = pa->op_type;   /* TOKEN_EQUALS / PLUS_EQ / MINUS_EQ */
+            if (pa->target->type == AST_INDEX_EXPR) {
+                ASTIndexExpr* ie = (ASTIndexExpr*)pa->target;
+                EvalValue obj = eval_expression(ie->array, env, sig);
+                if (*sig != EVAL_SIG_NONE) return obj;
+                EvalValue index = eval_expression(ie->index, env, sig);
+                if (*sig != EVAL_SIG_NONE) { eval_value_free(obj); return index; }
+                EvalValue val = eval_expression(pa->value, env, sig);
+                if (*sig != EVAL_SIG_NONE) {
+                    eval_value_free(obj); eval_value_free(index); return val;
+                }
+                if (obj.type != EVAL_VAL_ARRAY || !obj.as.arr) {
+                    RUNTIME_ERROR("indexed assignment target is not an array");
+                    eval_value_free(obj); eval_value_free(index); eval_value_free(val);
+                    *sig = EVAL_SIG_ERROR;
+                    return eval_error();
+                }
+                if (index.type != EVAL_VAL_INT) {
+                    RUNTIME_ERROR("array index must be an int");
+                    eval_value_free(obj); eval_value_free(index); eval_value_free(val);
+                    *sig = EVAL_SIG_ERROR;
+                    return eval_error();
+                }
+                EvalArrayObj* arr = obj.as.arr;
+                long long idx = index.as.i;
+                if (idx < 0) idx += arr->count;
+                if (idx < 0 || idx >= arr->count) {
+                    RUNTIME_ERROR("array index %lld out of bounds (array length %lld)",
+                                  idx, (long long)arr->count);
+                    eval_value_free(obj); eval_value_free(index); eval_value_free(val);
+                    *sig = EVAL_SIG_ERROR;
+                    return eval_error();
+                }
+                eval_value_free(obj); eval_value_free(index);
+                if (op == TOKEN_EQUALS) {
+                    eval_value_free(arr->items[idx]);
+                    arr->items[idx] = val;   /* moves in */
+                    return eval_void();
+                }
+                /* Read-modify-write for += / -=. */
+                EvalValue current = arr->items[idx];   /* moves out */
+                if (op == TOKEN_PLUS_EQ &&
+                    (current.type == EVAL_VAL_STRING || val.type == EVAL_VAL_STRING)) {
+                    char* ls = eval_value_to_string(current);
+                    char* rs = eval_value_to_string(val);
+                    size_t len = strlen(ls) + strlen(rs) + 1;
+                    char* cat = malloc(len);
+                    if (cat) { strcpy(cat, ls); strcat(cat, rs); }
+                    free(ls); free(rs);
+                    eval_value_free(current); eval_value_free(val);
+                    if (!cat) { *sig = EVAL_SIG_ERROR; return eval_error(); }
+                    arr->items[idx] = eval_string_take(cat);
+                    return eval_void();
+                }
+                coerce_numeric(&current, &val);
+                if (current.type == EVAL_VAL_INT && val.type == EVAL_VAL_INT) {
+                    long long r = op == TOKEN_PLUS_EQ
+                        ? current.as.i + val.as.i
+                        : current.as.i - val.as.i;
+                    eval_value_free(current); eval_value_free(val);
+                    arr->items[idx] = eval_int(r);
+                    return eval_void();
+                }
+                if (current.type == EVAL_VAL_FLOAT && val.type == EVAL_VAL_FLOAT) {
+                    double r = op == TOKEN_PLUS_EQ
+                        ? current.as.f + val.as.f
+                        : current.as.f - val.as.f;
+                    eval_value_free(current); eval_value_free(val);
+                    arr->items[idx] = eval_float(r);
+                    return eval_void();
+                }
+                eval_value_free(current); eval_value_free(val);
+                RUNTIME_ERROR("unsupported operand types for compound assignment");
+                *sig = EVAL_SIG_ERROR;
+                return eval_error();
+            }
+            if (pa->target->type == AST_PROP_EXPR) {
+                ASTPropExpr* pe = (ASTPropExpr*)pa->target;
+                EvalValue obj = eval_expression(pe->object, env, sig);
+                if (*sig != EVAL_SIG_NONE) return obj;
+                EvalValue val = eval_expression(pa->value, env, sig);
+                if (*sig != EVAL_SIG_NONE) { eval_value_free(obj); return val; }
+                if (obj.type != EVAL_VAL_STRUCT || !obj.as.strct) {
+                    RUNTIME_ERROR("field assignment target is not a struct");
+                    eval_value_free(obj); eval_value_free(val);
+                    *sig = EVAL_SIG_ERROR;
+                    return eval_error();
+                }
+                EvalStructObj* so = obj.as.strct;
+                int fidx = -1;
+                for (int f = 0; f < so->field_count; f++) {
+                    if (so->field_names[f] &&
+                        strcmp(so->field_names[f], pe->prop_name) == 0) { fidx = f; break; }
+                }
+                if (fidx < 0 && so->struct_name)
+                    fidx = eval_struct_field_index(so->struct_name, pe->prop_name);
+                if (fidx < 0 || fidx >= so->field_count) {
+                    RUNTIME_ERROR("struct '%s' has no field '%s'",
+                                  so->struct_name ? so->struct_name : "?", pe->prop_name);
+                    eval_value_free(obj); eval_value_free(val);
+                    *sig = EVAL_SIG_ERROR;
+                    return eval_error();
+                }
+                eval_value_free(obj);
+                if (op == TOKEN_EQUALS) {
+                    eval_value_free(so->fields[fidx]);
+                    so->fields[fidx] = val;   /* moves in */
+                    return eval_void();
+                }
+                EvalValue current = so->fields[fidx];   /* moves out */
+                if (op == TOKEN_PLUS_EQ &&
+                    (current.type == EVAL_VAL_STRING || val.type == EVAL_VAL_STRING)) {
+                    char* ls = eval_value_to_string(current);
+                    char* rs = eval_value_to_string(val);
+                    size_t len = strlen(ls) + strlen(rs) + 1;
+                    char* cat = malloc(len);
+                    if (cat) { strcpy(cat, ls); strcat(cat, rs); }
+                    free(ls); free(rs);
+                    eval_value_free(current); eval_value_free(val);
+                    if (!cat) { *sig = EVAL_SIG_ERROR; return eval_error(); }
+                    so->fields[fidx] = eval_string_take(cat);
+                    return eval_void();
+                }
+                coerce_numeric(&current, &val);
+                if (current.type == EVAL_VAL_INT && val.type == EVAL_VAL_INT) {
+                    long long r = op == TOKEN_PLUS_EQ
+                        ? current.as.i + val.as.i
+                        : current.as.i - val.as.i;
+                    eval_value_free(current); eval_value_free(val);
+                    so->fields[fidx] = eval_int(r);
+                    return eval_void();
+                }
+                if (current.type == EVAL_VAL_FLOAT && val.type == EVAL_VAL_FLOAT) {
+                    double r = op == TOKEN_PLUS_EQ
+                        ? current.as.f + val.as.f
+                        : current.as.f - val.as.f;
+                    eval_value_free(current); eval_value_free(val);
+                    so->fields[fidx] = eval_float(r);
+                    return eval_void();
+                }
+                eval_value_free(current); eval_value_free(val);
+                RUNTIME_ERROR("unsupported operand types for compound assignment");
+                *sig = EVAL_SIG_ERROR;
+                return eval_error();
+            }
+            RUNTIME_ERROR("unsupported assignment target");
+            *sig = EVAL_SIG_ERROR;
+            return eval_error();
         }
 
         case AST_ASSIGN_STMT: {
@@ -1303,7 +2047,9 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
         case AST_MEMBER_CALL: {
             /* 2.6.0 (FU5): statement-position module member calls work in
              * eval/REPL — same prefixed-name routing as the expression
-             * case. */
+             * case. 2.10.0 (FU-vmc): value receivers (structs/arrays)
+             * dispatch to their methods here too, sharing the expression
+             * path via eval_expression on the member-call node. */
             ASTMemberCall* mc = (ASTMemberCall*)node;
             if (mc->object && mc->object->type == AST_IDENTIFIER) {
                 const char* alias = ((ASTIdentifier*)mc->object)->name;
@@ -1320,26 +2066,21 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
                     eval_value_free(result);
                     return eval_void();
                 }
+                /* Not a module member — fall through to value-method
+                 * dispatch on the receiver (struct method, array builtin
+                 * or a private-member error), mirroring the expression
+                 * case below. */
             }
-            {
-                const char* alias = (mc->object && mc->object->type == AST_IDENTIFIER)
-                    ? ((ASTIdentifier*)mc->object)->name : "<expr>";
-                RUNTIME_ERROR("unknown module member `%s.%s` (did you import it? e.g. `import \"%s.lamo\" as %s;`)",
-                              alias, mc->member_name, alias, alias);
-            }
-            *sig = EVAL_SIG_ERROR;
-            return eval_error();
+            EvalValue result = eval_expression(node, env, sig);
+            eval_value_free(result);
+            return eval_void();
         }
 
         case AST_IF_STMT: {
             ASTIfStmt* is = (ASTIfStmt*)node;
             EvalValue cond = eval_expression(is->condition, env, sig);
             if (*sig != EVAL_SIG_NONE) return cond;
-            int truthy = (cond.type == EVAL_VAL_BOOL)   ? cond.as.b :
-                         (cond.type == EVAL_VAL_INT)    ? (cond.as.i != 0) :
-                         (cond.type == EVAL_VAL_FLOAT)  ? (cond.as.f != 0.0) :
-                         (cond.type == EVAL_VAL_STRING) ? (cond.as.s && cond.as.s[0]) :
-                         (cond.type == EVAL_VAL_ENUM)   ? 1 : 0;
+            int truthy = eval_is_truthy(cond);
             eval_value_free(cond);
             if (truthy) return eval_statement(is->then_branch, env, sig);
             if (is->else_branch) return eval_statement(is->else_branch, env, sig);
@@ -1351,10 +2092,7 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
             for (;;) {
                 EvalValue cond = eval_expression(ws->condition, env, sig);
                 if (*sig != EVAL_SIG_NONE) return cond;
-                int truthy = (cond.type == EVAL_VAL_BOOL) ? cond.as.b :
-                             (cond.type == EVAL_VAL_INT)  ? (cond.as.i != 0) :
-                             (cond.type == EVAL_VAL_FLOAT)? (cond.as.f != 0.0) :
-                             (cond.type == EVAL_VAL_ENUM) ? 1 : 0;
+                int truthy = eval_is_truthy(cond);
                 eval_value_free(cond);
                 if (!truthy) break;
 
@@ -1377,10 +2115,7 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
                 if (!fs->condition) break;
                 EvalValue cond = eval_expression(fs->condition, for_frame, sig);
                 if (*sig != EVAL_SIG_NONE) { eval_value_free(cond); break; }
-                int truthy = (cond.type == EVAL_VAL_BOOL) ? cond.as.b :
-                             (cond.type == EVAL_VAL_INT)  ? (cond.as.i != 0) :
-                             (cond.type == EVAL_VAL_FLOAT)? (cond.as.f != 0.0) :
-                             (cond.type == EVAL_VAL_ENUM) ? 1 : 0;
+                int truthy = eval_is_truthy(cond);
                 eval_value_free(cond);
                 if (!truthy) break;
 
@@ -1439,13 +2174,20 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
 int eval_program(ASTProgram* program, EvalEnv* env) {
     /* Pre-register all top-level functions so forward calls work, and
      * all enums so variants/ctors resolve before their declaration line
-     * (2.8.0 FU1 — hoisting parity with functions). */
+     * (2.8.0 FU1 — hoisting parity with functions). 2.10.0: structs and
+     * impl blocks register the same way — struct literals, field access
+     * and method calls (trait impls included) resolve before their
+     * declaration line, mirroring the compiler's hoisted registries. */
     for (ASTNode* n = program->declarations; n; n = n->next) {
         if (n->type == AST_FN_DECL) {
             ASTFnDecl* fn = (ASTFnDecl*)n;
             eval_env_define_fn(env, fn->name, fn, env);
         } else if (n->type == AST_ENUM_DECL) {
             eval_register_enum_decl((ASTEnumDecl*)n);
+        } else if (n->type == AST_STRUCT_DECL) {
+            eval_register_struct_decl((ASTStructDecl*)n);
+        } else if (n->type == AST_IMPL_DECL) {
+            eval_register_impl_decl((ASTImplDecl*)n);
         }
     }
 
@@ -1453,6 +2195,9 @@ int eval_program(ASTProgram* program, EvalEnv* env) {
     for (ASTNode* n = program->declarations; n; n = n->next) {
         if (n->type == AST_FN_DECL) continue; /* already registered */
         if (n->type == AST_ENUM_DECL) continue; /* already registered (2.8.0) */
+        if (n->type == AST_STRUCT_DECL) continue; /* already registered (2.10.0) */
+        if (n->type == AST_IMPL_DECL) continue; /* already registered (2.10.0) */
+        if (n->type == AST_TRAIT_DECL) continue; /* no runtime effect (2.9.0) */
         EvalSignal sig = EVAL_SIG_NONE;
         EvalValue result = eval_statement(n, env, &sig);
         eval_value_free(result);
@@ -1485,11 +2230,20 @@ int eval_load_module_program(ASTProgram* program, EvalEnv* env) {
         if (n->type == AST_FN_DECL) {
             ASTFnDecl* fn = (ASTFnDecl*)n;
             eval_env_define_fn(env, fn->name, fn, env);
+        } else if (n->type == AST_STRUCT_DECL) {
+            /* 2.10.0 (FU-vmc): module structs + impls register so
+             * literals, fields and methods work through module aliases. */
+            eval_register_struct_decl((ASTStructDecl*)n);
+        } else if (n->type == AST_IMPL_DECL) {
+            eval_register_impl_decl((ASTImplDecl*)n);
         }
     }
     for (ASTNode* n = program->declarations; n; n = n->next) {
         if (n->type == AST_FN_DECL) continue; /* registered above */
         if (n->type == AST_IMPORT) continue;  /* resolved by the loader */
+        if (n->type == AST_STRUCT_DECL) continue; /* registered above (2.10.0) */
+        if (n->type == AST_IMPL_DECL) continue;   /* registered above (2.10.0) */
+        if (n->type == AST_TRAIT_DECL) continue;  /* no runtime effect (2.9.0) */
         EvalSignal sig = EVAL_SIG_NONE;
         EvalValue result = eval_statement(n, env, &sig);
         eval_value_free(result);

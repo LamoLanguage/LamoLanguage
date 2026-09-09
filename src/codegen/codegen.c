@@ -1103,6 +1103,21 @@ static void ast_detect_features(ASTNode* node, int* flags) {
     }
 }
 
+/* 2.10.0 trait dictionary dispatch — helper prototypes and the
+ * collected dictionary registry (types = traits used in dispatch,
+ * instances = (trait, struct) pairs stamped on call sites). The
+ * helpers themselves are defined below generate_c_code. */
+#define LAMO_MAX_DICT_TYPES 64
+#define LAMO_MAX_DICT_INSTANCES 128
+static char* g_dict_type_traits[LAMO_MAX_DICT_TYPES];   /* owned strdups */
+static int g_dict_type_count = 0;
+static struct { char* trait; char* strct; } g_dict_instances[LAMO_MAX_DICT_INSTANCES];
+static int g_dict_instance_count = 0;
+static void collect_trait_dicts(ASTNode* node);
+static void emit_dict_typedefs(ASTNode* program, FILE* out);
+static void emit_dict_instances(ASTNode* program, FILE* out);
+static void emit_fn_hidden_dict_params(ASTFnDecl* fn_decl, int is_method, FILE* out);
+
 void generate_c_code(ASTNode* node, FILE* out) {
     ASTNode* current;
     int needs_gui_runtime;
@@ -1136,6 +1151,16 @@ void generate_c_code(ASTNode* node, FILE* out) {
     ast_detect_features(node, &feat_flags);
     emit_runtime(out, needs_gui_runtime, needs_http_runtime, needs_std_runtime, feat_flags);
 
+    /* 2.10.0 trait dictionary dispatch: collect the dictionary types
+     * (traits used in dispatch) and instances ((trait, struct) pairs
+     * stamped on call sites), then emit the typedefs BEFORE the forward
+     * declarations — hidden dictionary parameters reference the types —
+     * and the instances AFTER them (they reference the methods). */
+    g_dict_type_count = 0;
+    g_dict_instance_count = 0;
+    collect_trait_dicts(node);
+    emit_dict_typedefs(node, out);
+
     // 1. Forward declarations de funções definidas pelo usuário.
     //    Phase 2: also forward-declare methods (from impl blocks). Methods
     //    are stored on AST_IMPL_DECL nodes; their sema_struct_name field
@@ -1161,6 +1186,9 @@ void generate_c_code(ASTNode* node, FILE* out) {
             fprintf(out, "LamoValue %s", user_name1(fn_decl->params[_i])); \
         } \
         if (fn_decl->param_count == 0 && !_is_method) fprintf(out, "void"); \
+        /* 2.10.0: hidden dictionary parameters for trait-constrained \
+         * type parameters (standalone fns only). */ \
+        emit_fn_hidden_dict_params(fn_decl, _is_method, out); \
         fprintf(out, ");\n"); \
     } while (0)
 
@@ -1178,6 +1206,10 @@ void generate_c_code(ASTNode* node, FILE* out) {
     }
     #undef EMIT_FN_FORWARD
     fprintf(out, "\n");
+
+    /* 2.10.0: static dictionary instances (after the forward
+     * declarations so every referenced method fn is declared). */
+    emit_dict_instances(node, out);
 
     // 2. Declarações de variáveis globais no escopo de arquivo.
     //    Inicializadores não-constantes são emitidos dentro de main().
@@ -1353,6 +1385,386 @@ void generate_c_code(ASTNode* node, FILE* out) {
     fprintf(out, "    return 0;\n}\n");
 }
 
+/* ── 2.10.0 trait dictionary dispatch ───────────────────────────────
+ * Generics compile ONCE under erasure, so a method call on a bare
+ * type-parameter receiver inside `fn draw<T: Shape>` cannot resolve
+ * through a concrete struct name. Instead the semantic pass stamps:
+ *   - AST_MEMBER_CALL: sema_trait_name + sema_tp_receiver — the call
+ *     emits `dict_T->method(...)` through a hidden dictionary
+ *     parameter of the enclosing generic fn;
+ *   - AST_CALL_EXPR/STMT: sema_trait_dicts — one hidden dictionary
+ *     argument per trait-constrained type parameter of the callee,
+ *     either a static instance built from the impl registry (concrete
+ *     struct target) or the enclosing fn's own dictionary (forwarding
+ *     target = a type-parameter name).
+ * The ABI extension: every trait-constrained type parameter of a
+ * STANDALONE generic fn adds one hidden trailing parameter
+ * `LamoDict_<Trait>* _dict_<T>`. No runtime type tags, no vtables —
+ * dispatch stays static per call site (RFC-generics §12.4). */
+static void dict_collect_type(const char* trait) {
+    if (!trait || !trait[0]) return;
+    for (int i = 0; i < g_dict_type_count; i++) {
+        if (strcmp(g_dict_type_traits[i], trait) == 0) return;
+    }
+    if (g_dict_type_count >= LAMO_MAX_DICT_TYPES) return;
+    g_dict_type_traits[g_dict_type_count++] = strdup(trait);
+}
+
+static void dict_collect_instance(const char* trait, const char* strct) {
+    if (!trait || !strct || !strct[0]) return;
+    for (int i = 0; i < g_dict_instance_count; i++) {
+        if (strcmp(g_dict_instances[i].trait, trait) == 0 &&
+            strcmp(g_dict_instances[i].strct, strct) == 0) return;
+    }
+    if (g_dict_instance_count >= LAMO_MAX_DICT_INSTANCES) return;
+    g_dict_instances[g_dict_instance_count].trait = strdup(trait);
+    g_dict_instances[g_dict_instance_count].strct = strdup(strct);
+    g_dict_instance_count++;
+}
+
+/* Strip a trailing `<...>` type-argument list: `Stack<int>` → `Stack`.
+ * Writes into `out` (borrowed by the caller). */
+static void dict_bare_struct_name(const char* name, char* out, size_t cap) {
+    if (!name) { out[0] = '\0'; return; }
+    const char* lt = strchr(name, '<');
+    size_t n = lt ? (size_t)(lt - name) : strlen(name);
+    if (n >= cap) n = cap - 1;
+    memcpy(out, name, n);
+    out[n] = '\0';
+}
+
+/* Walk the AST collecting every dictionary type (trait names that
+ * appear as constraints used for dispatch) and instance (trait,struct)
+ * pair stamped on call sites. Mirrors ast_detect_features' traversal —
+ * every node kind that can contain a call site. */
+static void collect_trait_dicts(ASTNode* node) {
+    if (!node) return;
+    int i;
+    switch (node->type) {
+        case AST_CALL_STMT: {
+            ASTCallStmt* cs = (ASTCallStmt*)node;
+            if (cs->base.sema_trait_dicts) {
+                SemaTraitDictList* dl = cs->base.sema_trait_dicts;
+                for (int d = 0; d < dl->count; d++) {
+                    if (!dl->items[d].trait_name) continue;
+                    dict_collect_type(dl->items[d].trait_name);
+                    if (dl->items[d].target && !dl->items[d].forwards) {
+                        char bare[128];
+                        dict_bare_struct_name(dl->items[d].target, bare, sizeof(bare));
+                        dict_collect_instance(dl->items[d].trait_name, bare);
+                    }
+                }
+            }
+            for (i = 0; i < cs->arg_count; i++) collect_trait_dicts(cs->args[i]);
+            return;
+        }
+        case AST_CALL_EXPR: {
+            ASTCallExpr* ce = (ASTCallExpr*)node;
+            if (ce->base.sema_trait_dicts) {
+                SemaTraitDictList* dl = ce->base.sema_trait_dicts;
+                for (int d = 0; d < dl->count; d++) {
+                    if (!dl->items[d].trait_name) continue;
+                    dict_collect_type(dl->items[d].trait_name);
+                    if (dl->items[d].target && !dl->items[d].forwards) {
+                        char bare[128];
+                        dict_bare_struct_name(dl->items[d].target, bare, sizeof(bare));
+                        dict_collect_instance(dl->items[d].trait_name, bare);
+                    }
+                }
+            }
+            for (i = 0; i < ce->arg_count; i++) collect_trait_dicts(ce->args[i]);
+            return;
+        }
+        case AST_MEMBER_CALL: {
+            ASTMemberCall* mc = (ASTMemberCall*)node;
+            /* Dictionary-dispatched method call: the trait's dict TYPE
+             * is needed (the instance lives in the caller's frame). */
+            if (mc->base.sema_trait_name) dict_collect_type(mc->base.sema_trait_name);
+            if (mc->base.sema_trait_dicts) {
+                SemaTraitDictList* dl = mc->base.sema_trait_dicts;
+                for (int d = 0; d < dl->count; d++) {
+                    if (!dl->items[d].trait_name) continue;
+                    dict_collect_type(dl->items[d].trait_name);
+                    if (dl->items[d].target && !dl->items[d].forwards) {
+                        char bare[128];
+                        dict_bare_struct_name(dl->items[d].target, bare, sizeof(bare));
+                        dict_collect_instance(dl->items[d].trait_name, bare);
+                    }
+                }
+            }
+            collect_trait_dicts(mc->object);
+            for (i = 0; i < mc->arg_count; i++) collect_trait_dicts(mc->args[i]);
+            return;
+        }
+        case AST_PROGRAM: {
+            for (ASTNode* c = ((ASTProgram*)node)->declarations; c; c = c->next)
+                collect_trait_dicts(c);
+            return;
+        }
+        case AST_VAR_DECL:
+            collect_trait_dicts(((ASTVarDecl*)node)->initializer); return;
+        case AST_FN_DECL:
+            /* Top-level fn with trait-constrained type params: its dict
+             * TYPE must be emitted (hidden parameters reference it) —
+             * instances come from call sites. */
+            if (!node->sema_struct_name && ((ASTFnDecl*)node)->type_param_constraints) {
+                ASTFnDecl* fd = (ASTFnDecl*)node;
+                for (int t = 0; t < fd->type_param_count; t++) {
+                    const char* con = fd->type_param_constraints[t];
+                    if (con && con[0]) dict_collect_type(con);
+                }
+            }
+            collect_trait_dicts(((ASTFnDecl*)node)->body); return;
+        case AST_BLOCK: {
+            for (ASTNode* s = ((ASTBlock*)node)->statements; s; s = s->next)
+                collect_trait_dicts(s);
+            return;
+        }
+        case AST_IF_STMT: {
+            ASTIfStmt* is = (ASTIfStmt*)node;
+            collect_trait_dicts(is->condition);
+            collect_trait_dicts(is->then_branch);
+            collect_trait_dicts(is->else_branch);
+            return;
+        }
+        case AST_WHILE_STMT: {
+            ASTWhileStmt* ws = (ASTWhileStmt*)node;
+            collect_trait_dicts(ws->condition);
+            collect_trait_dicts(ws->body);
+            return;
+        }
+        case AST_FOR_STMT: {
+            ASTForStmt* fs = (ASTForStmt*)node;
+            collect_trait_dicts(fs->initializer);
+            collect_trait_dicts(fs->condition);
+            collect_trait_dicts(fs->increment);
+            collect_trait_dicts(fs->body);
+            return;
+        }
+        case AST_RETURN_STMT:
+            collect_trait_dicts(((ASTReturnStmt*)node)->expression); return;
+        case AST_ASSIGN_STMT:
+            collect_trait_dicts(((ASTAssignStmt*)node)->value); return;
+        case AST_UNARY_EXPR:
+            collect_trait_dicts(((ASTUnaryExpr*)node)->right); return;
+        case AST_GROUPING_EXPR:
+            collect_trait_dicts(((ASTGroupingExpr*)node)->expression); return;
+        case AST_BINARY_EXPR: {
+            ASTBinaryExpr* be = (ASTBinaryExpr*)node;
+            collect_trait_dicts(be->left);
+            collect_trait_dicts(be->right);
+            return;
+        }
+        case AST_ARRAY_LITERAL: {
+            ASTArrayLiteral* al = (ASTArrayLiteral*)node;
+            for (i = 0; i < al->element_count; i++) collect_trait_dicts(al->elements[i]);
+            return;
+        }
+        case AST_INDEX_EXPR: {
+            ASTIndexExpr* ie = (ASTIndexExpr*)node;
+            collect_trait_dicts(ie->array);
+            collect_trait_dicts(ie->index);
+            return;
+        }
+        case AST_PROP_EXPR:
+            collect_trait_dicts(((ASTPropExpr*)node)->object); return;
+        case AST_MATCH_STMT: {
+            ASTMatchStmt* ms = (ASTMatchStmt*)node;
+            collect_trait_dicts(ms->scrutinee);
+            for (i = 0; i < ms->arm_count; i++) {
+                if (ms->patterns[i] &&
+                    ms->patterns[i]->kind == LAMO_PATTERN_LITERAL &&
+                    ms->patterns[i]->literal) {
+                    collect_trait_dicts(ms->patterns[i]->literal);
+                }
+                if (ms->guards[i]) collect_trait_dicts(ms->guards[i]);
+                if (ms->bodies[i]) collect_trait_dicts(ms->bodies[i]);
+            }
+            return;
+        }
+        case AST_STRUCT_LITERAL: {
+            ASTStructLiteral* sl = (ASTStructLiteral*)node;
+            for (i = 0; i < sl->field_count; i++) collect_trait_dicts(sl->field_values[i]);
+            return;
+        }
+        case AST_PLACE_ASSIGN_STMT: {
+            ASTPlaceAssignStmt* pa = (ASTPlaceAssignStmt*)node;
+            collect_trait_dicts(pa->target);
+            collect_trait_dicts(pa->value);
+            return;
+        }
+        default:
+            return;
+    }
+}
+
+/* Emit the dictionary struct typedefs (one per trait used for
+ * dispatch): `typedef struct { LamoValue (*m)(LamoValue, ...); ... }
+ * LamoDict_<Trait>;` — one function-pointer field per trait method,
+ * self included in the arity, all values erased to LamoValue. */
+static void emit_dict_typedefs(ASTNode* program, FILE* out) {
+    for (int i = 0; i < g_dict_type_count; i++) {
+        const char* trait = g_dict_type_traits[i];
+        /* Find the trait declaration to enumerate its methods. */
+        ASTTraitDecl* td = NULL;
+        for (ASTNode* cur = ((ASTProgram*)program)->declarations; cur; cur = cur->next) {
+            if (cur->type == AST_TRAIT_DECL &&
+                strcmp(((ASTTraitDecl*)cur)->name, trait) == 0) {
+                td = (ASTTraitDecl*)cur;
+                break;
+            }
+        }
+        if (!td) continue;  /* defensive: only stamped traits collect */
+        fprintf(out, "typedef struct {\n");
+        int mcount = 0;
+        for (ASTNode* m = td->methods; m; m = m->next) {
+            if (m->type != AST_FN_DECL) continue;
+            ASTFnDecl* sig = (ASTFnDecl*)m;
+            fprintf(out, "    LamoValue (*%s)(" , sig->name);
+            /* self + declared params, all erased to LamoValue (a
+             * parameterless trait method still takes self). */
+            for (int p = 0; p <= sig->param_count; p++) {
+                fprintf(out, "%sLamoValue", p > 0 ? ", " : "");
+            }
+            fprintf(out, ");\n");
+            mcount++;
+        }
+        if (mcount == 0) {
+            /* C forbids empty structs — a methodless trait never
+             * dispatches, but keep the type well-formed. */
+            fprintf(out, "    char _lamo_dict_empty;\n");
+        }
+        fprintf(out, "} LamoDict_%s;\n", trait);
+    }
+    if (g_dict_type_count > 0) fprintf(out, "\n");
+}
+
+/* `lamo_dict_<Trait>_<Struct>` through the user-name ring. */
+static const char* dict_instance_name1(const char* trait, const char* strct) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "lamo_dict_%s_%s", trait, strct);
+    return user_name1(buf);
+}
+
+/* Built-in catalogue constraints add NO hidden dictionary parameter —
+ * they carry no methods and call sites stamp no dictionaries for them. */
+static int dict_is_catalogue_constraint(const char* con) {
+    return strcmp(con, "Any") == 0 || strcmp(con, "Eq") == 0 ||
+           strcmp(con, "Ord") == 0 || strcmp(con, "Num") == 0 ||
+           strcmp(con, "Hash") == 0 || strcmp(con, "Show") == 0;
+}
+
+/* Append a STANDALONE generic fn's hidden dictionary parameters — one
+ * `LamoDict_<Trait>* _dict_<T>` per trait-constrained type parameter,
+ * in declaration order. Methods keep the erased ABI (the semantic pass
+ * rejects trait constraints on method declarations). Used by both the
+ * forward declarations and the fn definitions. */
+static void emit_fn_hidden_dict_params(ASTFnDecl* fn_decl, int is_method, FILE* out) {
+    if (is_method || !fn_decl->type_param_constraints) return;
+    for (int t = 0; t < fn_decl->type_param_count; t++) {
+        const char* con = fn_decl->type_param_constraints[t];
+        if (!con || con[0] == '\0' || dict_is_catalogue_constraint(con)) continue;
+        char pname[96];
+        snprintf(pname, sizeof(pname), "_dict_%s", fn_decl->type_params[t]);
+        fprintf(out, ", LamoDict_%s* %s", con, user_name1(pname));
+    }
+}
+
+/* Emit `(void)` suppressions for a fn's hidden dictionary parameters —
+ * a generic fn whose body never dispatches through a constrained type
+ * parameter still carries the ABI parameter, which would otherwise
+ * trigger GCC's -Wunused-parameter in every generated program. */
+static void emit_fn_dict_param_suppressions(ASTFnDecl* fn_decl, int is_method, FILE* out) {
+    if (is_method || !fn_decl->type_param_constraints) return;
+    for (int t = 0; t < fn_decl->type_param_count; t++) {
+        const char* con = fn_decl->type_param_constraints[t];
+        if (!con || con[0] == '\0' || dict_is_catalogue_constraint(con)) continue;
+        char pname[96];
+        snprintf(pname, sizeof(pname), "_dict_%s", fn_decl->type_params[t]);
+        fprintf(out, "    (void)%s;\n", user_name1(pname));
+    }
+}
+
+/* Emit the hidden dictionary arguments stamped on a call site:
+ * forwarding targets reference the enclosing fn's own hidden parameter
+ * (`user__dict_T`); concrete targets take the address of the static
+ * instance (`&user_lamo_dict_<Trait>_<Struct>`). */
+static void emit_call_dict_args(ASTNode* call_node, FILE* out) {
+    SemaTraitDictList* dl = call_node->sema_trait_dicts;
+    if (!dl) return;
+    for (int d = 0; d < dl->count; d++) {
+        const char* trait = dl->items[d].trait_name;
+        const char* target = dl->items[d].target;
+        if (!trait || !target) continue;
+        if (dl->items[d].forwards) {
+            char pname[96];
+            snprintf(pname, sizeof(pname), "_dict_%s", target);
+            fprintf(out, ", %s", user_name1(pname));
+        } else {
+            fprintf(out, ", &%s", dict_instance_name1(trait, target));
+        }
+    }
+}
+
+/* Emit the static dictionary instances, one per (trait, struct) pair
+ * stamped on call sites:
+ *   static const LamoDict_Shape user_lamo_dict_Shape_Circle =
+ *       { .area = user_lamo_method_Circle__area, ... };
+ * Fields follow the TRAIT's method order; each initializer is the
+ * matching trait-impl method (mangled `lamo_method_<S>__<m>`). Impl
+ * completeness is enforced by the semantic pass, so every field
+ * resolves. Emitted after the fn/method forward declarations. */
+static void emit_dict_instances(ASTNode* program, FILE* out) {
+    int any = 0;
+    for (int i = 0; i < g_dict_instance_count; i++) {
+        const char* trait = g_dict_instances[i].trait;
+        const char* strct = g_dict_instances[i].strct;
+        ASTTraitDecl* td = NULL;
+        ASTImplDecl* impl = NULL;
+        for (ASTNode* cur = ((ASTProgram*)program)->declarations; cur; cur = cur->next) {
+            if (cur->type == AST_TRAIT_DECL && !td &&
+                strcmp(((ASTTraitDecl*)cur)->name, trait) == 0) {
+                td = (ASTTraitDecl*)cur;
+            } else if (cur->type == AST_IMPL_DECL && !impl) {
+                ASTImplDecl* id = (ASTImplDecl*)cur;
+                if (id->trait_name && strcmp(id->trait_name, trait) == 0 && id->struct_name) {
+                    char bare[128];
+                    dict_bare_struct_name(id->struct_name, bare, sizeof(bare));
+                    if (strcmp(bare, strct) == 0) impl = id;
+                }
+            }
+            if (td && impl) break;
+        }
+        if (!td || !impl) continue;  /* defensive: stamps imply both exist */
+        /* Non-const: the hidden dictionary parameters are plain
+         * `LamoDict_<Trait>*`, and the backend never mutates instances. */
+        fprintf(out, "static LamoDict_%s %s = { ", trait,
+                dict_instance_name1(trait, strct));
+        int first = 1;
+        for (ASTNode* m = td->methods; m; m = m->next) {
+            if (m->type != AST_FN_DECL) continue;
+            ASTFnDecl* sig = (ASTFnDecl*)m;
+            /* Find the implementing method in the trait impl. */
+            ASTFnDecl* found = NULL;
+            for (ASTNode* im = impl->methods; im; im = im->next) {
+                if (im->type == AST_FN_DECL &&
+                    strcmp(((ASTFnDecl*)im)->name, sig->name) == 0) {
+                    found = (ASTFnDecl*)im;
+                    break;
+                }
+            }
+            if (!found) continue;  /* completeness validated upstream */
+            char mangled[256];
+            snprintf(mangled, sizeof(mangled), "lamo_method_%s__%s", strct, sig->name);
+            fprintf(out, "%s.%s = %s", first ? "" : ", ", sig->name, user_name1(mangled));
+            first = 0;
+        }
+        fprintf(out, " };\n");
+        any = 1;
+    }
+    if (any) fprintf(out, "\n");
+}
+
 /* Phase 2: generate code for a member call (`obj.method(args)`).
  * Dispatches based on the call kind:
  *   - Module call: object is an identifier matching a registered module alias.
@@ -1362,6 +1774,23 @@ void generate_c_code(ASTNode* node, FILE* out) {
  *     `lamo_method_<Type>__<method>(obj, args)` (self is the first arg).
  * Used by both statement and expression positions. */
 static void generate_member_call_code(ASTMemberCall* mc, FILE* out) {
+    /* 2.10.0: DICTIONARY DISPATCH — a method call on a bare
+     * type-parameter receiver routes through the enclosing generic fn's
+     * hidden dictionary parameter: `_dict_T->method(self, args)`. The
+     * semantic pass stamps sema_trait_name + sema_tp_receiver; checked
+     * FIRST so the receiver never hits the module/struct/array routes. */
+    if (mc->base.sema_trait_name && mc->base.sema_tp_receiver) {
+        char pname[96];
+        snprintf(pname, sizeof(pname), "_dict_%s", mc->base.sema_tp_receiver);
+        fprintf(out, "%s->%s(", user_name1(pname), mc->member_name);
+        generate_expression_code(mc->object, out);
+        for (int i = 0; i < mc->arg_count; i++) {
+            fprintf(out, ", ");
+            generate_expression_code(mc->args[i], out);
+        }
+        fprintf(out, ")");
+        return;
+    }
     /* Try module call first. */
     if (g_module_registry && mc->object && mc->object->type == AST_IDENTIFIER) {
         const char* alias = ((ASTIdentifier*)mc->object)->name;
@@ -1453,8 +1882,18 @@ static void generate_prop_expr_code(ASTPropExpr* pe, FILE* out) {
         }
     }
     /* Struct field access? */
+    /* 2.10.0 (FU-vmc): honor the array route marker FIRST — chained
+     * receivers (`b.items.len`, `self.items.len`) carry a struct tag on
+     * the object from the inner field access, but semantic resolved the
+     * chain to an ARRAY-len access (sema_full_type == "array", the same
+     * convention as member calls). Without this check the struct route
+     * would look up "len" as a field and emit the defensive
+     * lamo_make_int(0). */
+    int sema_says_array = (((ASTNode*)pe)->sema_full_type != NULL &&
+                           strcmp(((ASTNode*)pe)->sema_full_type, "array") == 0);
     const char* struct_name = pe->object ? pe->object->sema_struct_name : NULL;
     if (!struct_name) struct_name = ((ASTNode*)pe)->sema_struct_name;
+    if (sema_says_array) struct_name = NULL;
     if (struct_name) {
         /* Find the struct definition and look up the field index. */
         int field_index = -1;
@@ -1564,6 +2003,10 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
             if (fn_decl->param_count == 0 && !is_method) {
                 fprintf(out, "void");
             }
+            /* 2.10.0: hidden dictionary parameters for trait-constrained
+             * type parameters (standalone fns only — mirrors the forward
+             * declarations above). */
+            emit_fn_hidden_dict_params(fn_decl, is_method, out);
             fprintf(out, ") ");
             /* Phase 2: emit the body with an implicit `return lamo_make_int(0);`
              * at the end so the C compiler doesn't warn about control
@@ -1585,6 +2028,9 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
                 ASTBlock* block = (ASTBlock*)fn_decl->body;
                 fprintf(out, "{\n");
                 indent_level++;
+                /* 2.10.0: suppress unused warnings for hidden dictionary
+                 * parameters the body never dispatches through. */
+                emit_fn_dict_param_suppressions(fn_decl, is_method, out);
                 /* Push params (and self) as roots. */
                 if (is_method) {
                     print_indent(out);
@@ -1831,6 +2277,9 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
             } else {
                 fprintf(out, "%s(", user_name1(call_stmt->name));
                 generate_call_arguments(call_stmt->args, call_stmt->arg_count, out);
+                /* 2.10.0: hidden dictionary arguments for a call to a
+                 * trait-constrained generic fn. */
+                emit_call_dict_args(node, out);
                 fprintf(out, ")");
             }
             fprintf(out, ";\n");
@@ -2477,6 +2926,9 @@ static void generate_expression_code(ASTNode* node, FILE* out) {
             } else {
                 fprintf(out, "%s(", user_name1(call_expr->name));
                 generate_call_arguments(call_expr->args, call_expr->arg_count, out);
+                /* 2.10.0: hidden dictionary arguments for a call to a
+                 * trait-constrained generic fn. */
+                emit_call_dict_args(node, out);
                 fprintf(out, ")");
             }
             break;
