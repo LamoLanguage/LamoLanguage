@@ -8,8 +8,10 @@
 #include <string.h>
 
 #define LAMO_NEEDS_VALUE_RUNTIME 1
+#define LAMO_NEEDS_STRING_OPS 1
 
 #undef LAMO_NEEDS_VALUE_RUNTIME
+#undef LAMO_NEEDS_STRING_OPS
 
 LamoValue lamo_u_main(void);
 

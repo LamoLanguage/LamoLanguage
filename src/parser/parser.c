@@ -1162,10 +1162,15 @@ static LamoTokenType parser_peek_next_type(Parser* p) {
  *
  * Grammar:
  *   pattern      := '_'
+ *                 | INT | FLOAT | STRING | 'true' | 'false' | '-' NUMERIC
  *                 | IDENT [ '::' IDENT ] [ '(' pattern-list ')' ]
  *   pattern-list := pattern (',' pattern)*
  *
  * - `_`                            wildcard leaf (any depth)
+ * - INT/FLOAT/STRING/true/false    literal pattern (2.8.0 FU3 —
+ *                                  `-1` / `-1.5` allowed at any depth);
+ *                                  compared against the scrutinee with
+ *                                  the backend's structural equality
  * - IDENT (nested, no parens/'::') BINDING leaf (e.g. the `a` in Some(a))
  * - IDENT (top level, no parens)   unit-variant constructor pattern
  * - IDENT '(' ... ')'              constructor pattern with payloads
@@ -1177,8 +1182,43 @@ static LamoTokenType parser_peek_next_type(Parser* p) {
  * parens. Returns a malloc'd LamoPattern owned by the caller (NULL +
  * registered error on failure; caller recovers). */
 static LamoPattern* parse_pattern_ctx(Parser* p, int nested) {
+    /* 2.8.0 (FU3): literal patterns at any depth. parse_primary builds
+     * the literal node (int literals arrive as long long, strings keep
+     * their decoded escapes); the node is owned by the LamoPattern. */
+    if (p->current.type == TOKEN_INT || p->current.type == TOKEN_FLOAT ||
+        p->current.type == TOKEN_STRING ||
+        p->current.type == TOKEN_TRUE || p->current.type == TOKEN_FALSE) {
+        int lit_line = p->current.line;
+        int lit_column = p->current.column;
+        ASTNode* lit = parse_primary(p);
+        if (!lit) return NULL;
+        if (p->current.type == TOKEN_LPAREN) {
+            parser_error(p, "literal pattern cannot bind payloads (remove the '(...)')");
+            ast_free(lit);
+            return NULL;
+        }
+        return ast_pattern_literal(lit, lit_line, lit_column);
+    }
+    /* Negative numeric literal patterns: `-1`, `-1.5`. Only `-` followed
+     * by a number starts a literal here — a bare `-` is still a syntax
+     * error in pattern position. */
+    if (p->current.type == TOKEN_MINUS) {
+        LamoTokenType nxt = parser_peek_next_type(p);
+        if (nxt == TOKEN_INT || nxt == TOKEN_FLOAT) {
+            int lit_line = p->current.line;
+            int lit_column = p->current.column;
+            advance_p(p);  /* consume '-' */
+            ASTNode* operand = parse_primary(p);
+            if (!operand) return NULL;
+            ASTUnaryExpr* neg = ast_new_unary_expr(TOKEN_MINUS, operand,
+                                                   lit_line, lit_column);
+            return ast_pattern_literal((ASTNode*)neg, lit_line, lit_column);
+        }
+        parser_error(p, "expected pattern (variant name, binding, literal, or '_') in match arm");
+        return NULL;
+    }
     if (p->current.type != TOKEN_IDENTIFIER) {
-        parser_error(p, "expected pattern (variant name, binding, or '_') in match arm");
+        parser_error(p, "expected pattern (variant name, binding, literal, or '_') in match arm");
         return NULL;
     }
     char* first = strdup(p->current.value);

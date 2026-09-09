@@ -431,6 +431,16 @@ typedef struct {
  *                          variant name, possibly qualified as
  *                          "Enum::Variant" (owned). `children` holds
  *                          one sub-pattern per payload slot.
+ *   LAMO_PATTERN_LITERAL   2.8.0 (FU3): a literal — `1 => ...`,
+ *                          `-2 => ...`, `1.5 => ...`, `"a" => ...`,
+ *                          `true`/`false`. `literal` owns an AST
+ *                          expression node (AST_INT_LITERAL,
+ *                          AST_FLOAT_LITERAL, AST_STRING_LITERAL,
+ *                          AST_BOOL_LITERAL, or a unary-minus numeric
+ *                          literal) evaluated against the scrutinee
+ *                          with the backend's structural equality.
+ *                          Literal arms bind nothing and never count
+ *                          toward enum exhaustiveness.
  *
  * sema_enum_name / sema_variant_index are stamped by the semantic pass
  * for LAMO_PATTERN_CTOR nodes (borrowed enum name, index within that
@@ -439,7 +449,8 @@ typedef struct {
 enum {
     LAMO_PATTERN_WILDCARD = 0,
     LAMO_PATTERN_BINDING  = 1,
-    LAMO_PATTERN_CTOR     = 2
+    LAMO_PATTERN_CTOR     = 2,
+    LAMO_PATTERN_LITERAL  = 3  /* 2.8.0 (FU3) */
 };
 
 typedef struct LamoPattern {
@@ -452,6 +463,9 @@ typedef struct LamoPattern {
     /* semantic stamps (ctor patterns only) */
     const char* sema_enum_name;
     int sema_variant_index;
+    /* 2.8.0 (FU3): literal pattern payload — an owned AST expression
+     * node (NULL for all other kinds). */
+    struct ASTNode* literal;
 } LamoPattern;
 
 /* Phase 2: match statement.
@@ -644,11 +658,13 @@ ASTNode* ast_new_variant_ref(const char* enum_name, const char* variant_name,
 
 /* 2.7.0 (FU2): pattern-tree constructors. Each returns a malloc'd
  * LamoPattern the caller assembles into arms. `ast_pattern_ctor` takes
- * ownership of the children array (contents AND array). */
+ * ownership of the children array (contents AND array). 2.8.0 (FU3):
+ * `ast_pattern_literal` takes ownership of the literal AST node. */
 LamoPattern* ast_pattern_wildcard(int line, int column);
 LamoPattern* ast_pattern_binding(const char* name, int line, int column);
 LamoPattern* ast_pattern_ctor(const char* name, LamoPattern** children, int child_count,
                               int line, int column);
+LamoPattern* ast_pattern_literal(struct ASTNode* literal, int line, int column);
 void ast_pattern_free(LamoPattern* pat);
 
 /* Struct literal: Name { field: value, ... }

@@ -1,0 +1,37 @@
+// 2.8.0 (FU3): literal patterns mixed with tagged-union enum patterns
+// (SPEC §4.6) — exercises the done-flag desugar's literal arm, nested
+// literal payload checks, and guarded-literal fall-through.
+enum Option<T> { Some(T), None }
+enum Shape { Circle(int), Rect(int, int) }
+
+let s = Shape::Rect(10, 20)
+match s {
+    Rect(10, _) => print("wide rect"),
+    Rect(w, h) => print(h),
+    Circle(_) => print("circle"),
+    _ => print("?")
+}
+
+let o = Some(Some(3))
+match o {
+    Some(Some(3)) => print("deep three"),
+    Some(Some(x)) => print(x),
+    Some(_) => print("shallow"),
+    None => print("none")
+}
+
+// the guarded Some arm fails its guard, falls through to the literal
+// comparison of the payload against 5, then to the wildcard.
+match Some(5) {
+    Some(v) when v > 10 => print("big"),
+    Some(5) => print("five!"),
+    _ => print("other")
+}
+
+// literal arm against an enum-typed scrutinee compares structurally
+// and simply does not match (never fires).
+match Some(1) {
+    1 => print("never fires"),
+    Some(1) => print("matched variant"),
+    _ => print("nope")
+}

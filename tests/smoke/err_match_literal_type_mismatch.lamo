@@ -1,0 +1,5 @@
+let x: int = 5
+match x {
+    "a" => print("string arm on int scrutinee"),
+    _ => print(0)
+}

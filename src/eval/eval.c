@@ -132,8 +132,11 @@ char* eval_value_to_string(EvalValue v) {
 }
 
 /* 2.8.0 (FU1): structural equality, mirroring the C runtime's
- * lamo_equal (lamo_runtime.h): enums compare tag-then-payload-wise;
- * mixed kinds are simply not equal (no error), matching the backend. */
+ * lamo_equal (lamo_runtime.h) shape for shape-for-shape parity:
+ * enums compare tag-then-payload-wise, strings strcmp, numerics
+ * compare via float coercion when either side is float and via int
+ * coercion otherwise (bools included) — mixed kinds simply are not
+ * equal (no error), matching the backend. */
 static int eval_values_equal(EvalValue l, EvalValue r) {
     if (l.type == EVAL_VAL_ENUM || r.type == EVAL_VAL_ENUM) {
         if (l.type != r.type) return 0;
@@ -146,14 +149,25 @@ static int eval_values_equal(EvalValue l, EvalValue r) {
         }
         return 1;
     }
-    if (l.type == EVAL_VAL_STRING && r.type == EVAL_VAL_STRING)
+    if (l.type == EVAL_VAL_STRING || r.type == EVAL_VAL_STRING) {
+        if (l.type != EVAL_VAL_STRING || r.type != EVAL_VAL_STRING) return 0;
         return strcmp(l.as.s ? l.as.s : "", r.as.s ? r.as.s : "") == 0;
-    if (l.type == EVAL_VAL_BOOL && r.type == EVAL_VAL_BOOL)
-        return l.as.b == r.as.b;
-    if (l.type == EVAL_VAL_INT && r.type == EVAL_VAL_INT)
-        return l.as.i == r.as.i;
-    if (l.type == EVAL_VAL_FLOAT && r.type == EVAL_VAL_FLOAT)
-        return l.as.f == r.as.f;
+    }
+    if (l.type == EVAL_VAL_FLOAT || r.type == EVAL_VAL_FLOAT) {
+        double lf = (l.type == EVAL_VAL_FLOAT) ? l.as.f :
+                    (l.type == EVAL_VAL_INT)   ? (double)l.as.i :
+                    (l.type == EVAL_VAL_BOOL)  ? (double)l.as.b : 0.0;
+        double rf = (r.type == EVAL_VAL_FLOAT) ? r.as.f :
+                    (r.type == EVAL_VAL_INT)   ? (double)r.as.i :
+                    (r.type == EVAL_VAL_BOOL)  ? (double)r.as.b : 0.0;
+        return lf == rf;
+    }
+    if (l.type == EVAL_VAL_INT || l.type == EVAL_VAL_BOOL) {
+        if (r.type != EVAL_VAL_INT && r.type != EVAL_VAL_BOOL) return 0;
+        long long li = (l.type == EVAL_VAL_INT) ? l.as.i : (long long)l.as.b;
+        long long ri = (r.type == EVAL_VAL_INT) ? r.as.i : (long long)r.as.b;
+        return li == ri;
+    }
     return 0;
 }
 
@@ -829,6 +843,18 @@ static int eval_pattern_match(LamoPattern* pat, EvalValue scrut,
     switch (pat->kind) {
         case LAMO_PATTERN_WILDCARD:
             return 1;
+
+        case LAMO_PATTERN_LITERAL: {
+            /* 2.8.0 (FU3): `1 => ...`, `"a" => ...` — compared with the
+             * same structural equality the == operator uses (which
+             * mirrors the backend's lamo_equal, including numeric
+             * coercion). Literals bind nothing. */
+            EvalValue lit = eval_expression(pat->literal, bind_env, sig);
+            if (*sig == EVAL_SIG_ERROR) return 0;
+            int eq = eval_values_equal(scrut, lit);
+            eval_value_free(lit);
+            return eq;
+        }
 
         case LAMO_PATTERN_BINDING:
             /* Legal only in a nested position; the clone gives the arm

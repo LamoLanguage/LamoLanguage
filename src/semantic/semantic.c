@@ -2943,6 +2943,37 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                             }
                         }
                     }
+                } else if (pat->kind == LAMO_PATTERN_LITERAL) {
+                    /* 2.8.0 (FU3): literal pattern — `1 => ...`,
+                     * `"a" => ...`, `true => ...`. Type-checked against
+                     * the scrutinee when the scrutinee's type is a
+                     * known builtin (int→float widening kept, matching
+                     * §7.3). Enum scrutinees defer to runtime semantics
+                     * (legacy untagged enums ARE ints at runtime), and
+                     * literal arms bind nothing and never count toward
+                     * enum exhaustiveness. */
+                    LamoType lit_type = semantic_infer_expression(ctx, pat->literal);
+                    if ((scrut_type == LAMO_TYPE_INT || scrut_type == LAMO_TYPE_FLOAT ||
+                         scrut_type == LAMO_TYPE_STRING || scrut_type == LAMO_TYPE_BOOL) &&
+                        lit_type != LAMO_TYPE_UNKNOWN) {
+                        /* Numeric pairs coerce both ways at runtime
+                         * (lamo_equal compares via float when either side
+                         * is float), so int↔float literal patterns are
+                         * accepted against numeric scrutinees; everything
+                         * else must match exactly. */
+                        int numeric_pair = (scrut_type == LAMO_TYPE_INT || scrut_type == LAMO_TYPE_FLOAT) &&
+                                           (lit_type == LAMO_TYPE_INT || lit_type == LAMO_TYPE_FLOAT);
+                        int ok = numeric_pair ||
+                                 (scrut_type == LAMO_TYPE_STRING && lit_type == LAMO_TYPE_STRING) ||
+                                 (scrut_type == LAMO_TYPE_BOOL   && lit_type == LAMO_TYPE_BOOL);
+                        if (!ok) {
+                            char message[256];
+                            snprintf(message, sizeof(message),
+                                     "literal pattern of type '%s' cannot match scrutinee of type '%s'",
+                                     type_name(lit_type), type_name(scrut_type));
+                            semantic_error_at(ctx, pat->line, pat->column, message);
+                        }
+                    }
                 }
             }
             /* Visit guards and bodies. Binding leaves are defined in a

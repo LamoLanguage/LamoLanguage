@@ -1,0 +1,55 @@
+// 2.8.0 (FU3): match literal patterns (SPEC §4.6). Int/float/string/
+// bool literals, negative numerics, numeric coercion, and guards —
+// all through the legacy else-if desugar (no enum variants involved).
+fn classify(n: int) {
+    match n {
+        0 => print("zero"),
+        -1 => print("neg one"),
+        2 => print("two"),
+        _ => print("other")
+    }
+}
+
+classify(0)
+classify(-1)
+classify(2)
+classify(7)
+
+let word = "b"
+match word {
+    "a" => print("letter a"),
+    "b" => print("letter b"),
+    _ => print("other letter")
+}
+
+match true {
+    true => print("yes"),
+    false => print("no")
+}
+
+match 1.5 {
+    1.5 => print("one point five"),
+    _ => print("other float")
+}
+
+// lamo_equal compares numerics via float when either side is float,
+// so a 5.0 literal pattern matches an int scrutinee of 5.
+match 5 {
+    5.0 => print("coerced"),
+    _ => print("nope")
+}
+
+// guards fall through: the guarded 10 arm fails its condition and the
+// unguarded 10 arm catches it.
+match 10 {
+    10 when false => print("never"),
+    10 => print("ten, unguarded"),
+    _ => print("fallback")
+}
+
+// first match wins
+match 3 {
+    3 => print("first three"),
+    3 => print("second three"),
+    _ => print("none")
+}

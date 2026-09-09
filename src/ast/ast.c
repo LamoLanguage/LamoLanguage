@@ -477,6 +477,7 @@ static LamoPattern* ast_pattern_new(int kind, const char* name,
     pat->column = column;
     pat->sema_enum_name = NULL;
     pat->sema_variant_index = -1;
+    pat->literal = NULL;
     return pat;
 }
 
@@ -493,6 +494,14 @@ LamoPattern* ast_pattern_ctor(const char* name, LamoPattern** children, int chil
     return ast_pattern_new(LAMO_PATTERN_CTOR, name, children, child_count, line, column);
 }
 
+/* 2.8.0 (FU3): literal pattern — `1`, `-2`, `1.5`, `"a"`, `true`.
+ * Takes ownership of the literal AST expression node. */
+LamoPattern* ast_pattern_literal(struct ASTNode* literal, int line, int column) {
+    LamoPattern* pat = ast_pattern_new(LAMO_PATTERN_LITERAL, NULL, NULL, 0, line, column);
+    pat->literal = literal;
+    return pat;
+}
+
 void ast_pattern_free(LamoPattern* pat) {
     if (!pat) return;
     free(pat->name);
@@ -500,6 +509,8 @@ void ast_pattern_free(LamoPattern* pat) {
         ast_pattern_free(pat->children[i]);
     }
     free(pat->children);
+    /* 2.8.0 (FU3): literal patterns own an expression node. */
+    if (pat->literal) ast_free((ASTNode*)pat->literal);
     free(pat);
 }
 

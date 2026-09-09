@@ -867,6 +867,50 @@ static int ast_uses_builtin(ASTNode* node, int (*predicate)(const char*)) {
         }
         case AST_PROP_EXPR:
             return ast_uses_builtin(((ASTPropExpr*)node)->object, predicate);
+        case AST_MATCH_STMT: {
+            /* 2.8.0 (FU3): match nodes were previously invisible to
+             * feature detection — a builtin called ONLY inside a match
+             * arm (or its guards / scrutinee / literal patterns) did not
+             * toggle the corresponding LAMO_NEEDS_* runtime flag, which
+             * could break builds. Walk every expression the node owns. */
+            ASTMatchStmt* ms = (ASTMatchStmt*)node;
+            if (ast_uses_builtin(ms->scrutinee, predicate)) {
+                return 1;
+            }
+            for (i = 0; i < ms->arm_count; i++) {
+                if (ms->patterns[i] &&
+                    ms->patterns[i]->kind == LAMO_PATTERN_LITERAL &&
+                    ms->patterns[i]->literal &&
+                    ast_uses_builtin(ms->patterns[i]->literal, predicate)) {
+                    return 1;
+                }
+                if (ms->guards[i] && ast_uses_builtin(ms->guards[i], predicate)) {
+                    return 1;
+                }
+                if (ms->bodies[i] && ast_uses_builtin(ms->bodies[i], predicate)) {
+                    return 1;
+                }
+            }
+            return 0;
+        }
+        case AST_STRUCT_LITERAL: {
+            /* Same latent gap: struct-literal field values. */
+            ASTStructLiteral* sl = (ASTStructLiteral*)node;
+            for (i = 0; i < sl->field_count; i++) {
+                if (ast_uses_builtin(sl->field_values[i], predicate)) {
+                    return 1;
+                }
+            }
+            return 0;
+        }
+        case AST_PLACE_ASSIGN_STMT: {
+            ASTPlaceAssignStmt* pa = (ASTPlaceAssignStmt*)node;
+            return ast_uses_builtin(pa->target, predicate) ||
+                   ast_uses_builtin(pa->value, predicate);
+        }
+        case AST_VARIANT_REF:
+            /* 2.8.0 (FU3): qualified variant values carry no calls. */
+            return 0;
         case AST_INT_LITERAL:
         case AST_FLOAT_LITERAL:
         case AST_STRING_LITERAL:
@@ -1026,6 +1070,34 @@ static void ast_detect_features(ASTNode* node, int* flags) {
             ast_detect_features(((ASTUnaryExpr*)node)->right, flags); return;
         case AST_GROUPING_EXPR:
             ast_detect_features(((ASTGroupingExpr*)node)->expression, flags); return;
+        case AST_MATCH_STMT: {
+            /* 2.8.0 (FU3): match was invisible to feature detection —
+             * literals/calls nested in arms did not toggle flags. */
+            ASTMatchStmt* ms = (ASTMatchStmt*)node;
+            ast_detect_features(ms->scrutinee, flags);
+            for (i = 0; i < ms->arm_count; i++) {
+                if (ms->patterns[i] &&
+                    ms->patterns[i]->kind == LAMO_PATTERN_LITERAL &&
+                    ms->patterns[i]->literal) {
+                    ast_detect_features(ms->patterns[i]->literal, flags);
+                }
+                if (ms->guards[i]) ast_detect_features(ms->guards[i], flags);
+                if (ms->bodies[i]) ast_detect_features(ms->bodies[i], flags);
+            }
+            return;
+        }
+        case AST_STRUCT_LITERAL: {
+            ASTStructLiteral* sl = (ASTStructLiteral*)node;
+            for (i = 0; i < sl->field_count; i++)
+                ast_detect_features(sl->field_values[i], flags);
+            return;
+        }
+        case AST_PLACE_ASSIGN_STMT: {
+            ASTPlaceAssignStmt* pa = (ASTPlaceAssignStmt*)node;
+            ast_detect_features(pa->target, flags);
+            ast_detect_features(pa->value, flags);
+            return;
+        }
         default:
             return;
     }
@@ -1853,6 +1925,38 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
                                 fprintf(out, "_lamo_match_done = 1;\n");
                                 if (ms->bodies[i]) generate_statement_code(ms->bodies[i], out);
                             }
+                        } else if (pat->kind == LAMO_PATTERN_LITERAL) {
+                            /* 2.8.0 (FU3): literal arm — compared with
+                             * structural equality (lamo_equal) against
+                             * the single-evaluation scrutinee temp. Same
+                             * done-flag discipline as the wildcard arm:
+                             * guarded arms flag inside the truthy block,
+                             * unguarded arms flag before the body. */
+                            print_indent(out);
+                            fprintf(out, "if (lamo_is_truthy(lamo_equal(_lamo_match_scrut, ");
+                            generate_expression_code(pat->literal, out);
+                            fprintf(out, "))) {\n");
+                            indent_level++;
+                            if (guard) {
+                                print_indent(out);
+                                fprintf(out, "if (lamo_is_truthy(");
+                                generate_expression_code(guard, out);
+                                fprintf(out, ")) {\n");
+                                indent_level++;
+                                if (ms->bodies[i]) generate_statement_code(ms->bodies[i], out);
+                                print_indent(out);
+                                fprintf(out, "_lamo_match_done = 1;\n");
+                                indent_level--;
+                                print_indent(out);
+                                fprintf(out, "}\n");
+                            } else {
+                                print_indent(out);
+                                fprintf(out, "_lamo_match_done = 1;\n");
+                                if (ms->bodies[i]) generate_statement_code(ms->bodies[i], out);
+                            }
+                            indent_level--;
+                            print_indent(out);
+                            fprintf(out, "}\n");
                         } else {
                             /* Constructor arm. Recursive emission over the
                              * pattern tree: value_expr owns the current
@@ -1898,6 +2002,18 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
                                             user_name1(cp->name), pexpr, cidx);
                                     print_indent(out);
                                     fprintf(out, "(void)%s;\n", user_name1(cp->name));
+                                } else if (cp->kind == LAMO_PATTERN_LITERAL) {
+                                    /* 2.8.0 (FU3): nested literal — the
+                                     * payload itself is compared with the
+                                     * literal; a failed compare skips to
+                                     * the next arm via the done-flag. */
+                                    print_indent(out);
+                                    fprintf(out, "if (lamo_is_truthy(lamo_equal(lamo_enum_payload(%s, %d), ",
+                                            pexpr, cidx);
+                                    generate_expression_code(cp->literal, out);
+                                    fprintf(out, "))) {\n");
+                                    indent_level++;
+                                    open_blocks++;
                                 } else if (cp->kind == LAMO_PATTERN_CTOR) {
                                     char tmp[48];
                                     snprintf(tmp, sizeof(tmp), "_lamo_pat_%d", pat_temp_id++);
@@ -1975,6 +2091,36 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
                         fprintf(out, "{ }\n");
                     }
                     has_emitted = 1;
+                } else if (pat->kind == LAMO_PATTERN_LITERAL) {
+                    /* 2.8.0 (FU3): literal arm in the legacy else-if
+                     * chain — `if (lamo_equal(scrut, lit) [&& guard])
+                     * body`. Structural equality covers int/float/
+                     * string/bool literals (numeric coercion kept).
+                     * The guard folds INSIDE the if condition (closing
+                     * parens depend on guard presence — the 2.7.0
+                     * emission closed the if early and generated
+                     * invalid C for guarded untagged arms; fixed here
+                     * for both arm kinds). */
+                    print_indent(out);
+                    if (has_emitted) fprintf(out, "else ");
+                    fprintf(out, "if (lamo_is_truthy(lamo_equal(");
+                    generate_expression_code(ms->scrutinee, out);
+                    fprintf(out, ", ");
+                    generate_expression_code(pat->literal, out);
+                    if (ms->guards[i]) {
+                        fprintf(out, ")) && lamo_is_truthy(");
+                        generate_expression_code(ms->guards[i], out);
+                        fprintf(out, "))");
+                    } else {
+                        fprintf(out, ")))");
+                    }
+                    fprintf(out, " ");
+                    if (ms->bodies[i]) {
+                        generate_statement_code(ms->bodies[i], out);
+                    } else {
+                        fprintf(out, "{ }\n");
+                    }
+                    has_emitted = 1;
                 } else {
                     /* `if (scrut == pattern [&& guard]) body` (or `else if`).
                      * 2.7.0 (FU4): compare against the variant's INDEX
@@ -1990,14 +2136,16 @@ static void generate_statement_code(ASTNode* node, FILE* out) {
                     fprintf(out, "if (lamo_is_truthy(lamo_equal(");
                     generate_expression_code(ms->scrutinee, out);
                     if (pat->sema_variant_index >= 0) {
-                        fprintf(out, ", lamo_make_int(%d))))", pat->sema_variant_index);
+                        fprintf(out, ", lamo_make_int(%d))", pat->sema_variant_index);
                     } else {
-                        fprintf(out, ", %s)))", user_name1(lamo_variant_short_name(pat->name)));
+                        fprintf(out, ", %s)", user_name1(lamo_variant_short_name(pat->name)));
                     }
                     if (ms->guards[i]) {
-                        fprintf(out, " && lamo_is_truthy(");
+                        fprintf(out, ") && lamo_is_truthy(");
                         generate_expression_code(ms->guards[i], out);
-                        fprintf(out, ")");
+                        fprintf(out, "))");
+                    } else {
+                        fprintf(out, "))");
                     }
                     fprintf(out, " ");
                     if (ms->bodies[i]) {
