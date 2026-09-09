@@ -2575,6 +2575,155 @@ static void generate_expression_code(ASTNode* node, FILE* out) {
             fprintf(out, "_lamo_struct_tmp; })");
             break;
         }
+        case AST_MATCH_STMT: {
+            /* 2.8.0 (FU4): match as an EXPRESSION — a GCC statement
+             * expression with a value accumulator, mirroring the
+             * statement desugar: single-evaluation scrutinee temp,
+             * per-arm done-flag so failed nested tag checks / guards /
+             * literal compares fall through to LATER arms, and
+             * `_lamo_match_val` holding the matched arm's value.
+             * Kept separate from the statement emitter (which must stay
+             * byte-identical for the golden snapshots); untagged ctor
+             * arms compare the variant index like the legacy path. */
+            ASTMatchStmt* ms = (ASTMatchStmt*)node;
+            fprintf(out, "({ LamoValue _lamo_match_val = lamo_make_int(0); ");
+            fprintf(out, "LamoValue _lamo_match_scrut = ");
+            generate_expression_code(ms->scrutinee, out);
+            fprintf(out, "; int _lamo_match_done = 0;\n");
+            int pat_temp_id = 0;
+            for (int i = 0; i < ms->arm_count; i++) {
+                LamoPattern* pat = ms->patterns[i];
+                ASTNode* guard = ms->guards[i];
+                if (!pat) continue;
+                fprintf(out, "if (!_lamo_match_done) {\n");
+                if (pat->kind == LAMO_PATTERN_WILDCARD) {
+                    if (guard) {
+                        fprintf(out, "if (lamo_is_truthy(");
+                        generate_expression_code(guard, out);
+                        fprintf(out, ")) { _lamo_match_val = ");
+                        if (ms->bodies[i]) generate_expression_code(ms->bodies[i], out);
+                        else fprintf(out, "lamo_make_int(0)");
+                        fprintf(out, "; _lamo_match_done = 1; }\n");
+                    } else {
+                        fprintf(out, "_lamo_match_val = ");
+                        if (ms->bodies[i]) generate_expression_code(ms->bodies[i], out);
+                        else fprintf(out, "lamo_make_int(0)");
+                        fprintf(out, "; _lamo_match_done = 1;\n");
+                    }
+                } else if (pat->kind == LAMO_PATTERN_LITERAL) {
+                    fprintf(out, "if (lamo_is_truthy(lamo_equal(_lamo_match_scrut, ");
+                    generate_expression_code(pat->literal, out);
+                    fprintf(out, "))) {\n");
+                    if (guard) {
+                        fprintf(out, "if (lamo_is_truthy(");
+                        generate_expression_code(guard, out);
+                        fprintf(out, ")) { _lamo_match_val = ");
+                        if (ms->bodies[i]) generate_expression_code(ms->bodies[i], out);
+                        else fprintf(out, "lamo_make_int(0)");
+                        fprintf(out, "; _lamo_match_done = 1; }\n");
+                    } else {
+                        fprintf(out, "_lamo_match_val = ");
+                        if (ms->bodies[i]) generate_expression_code(ms->bodies[i], out);
+                        else fprintf(out, "lamo_make_int(0)");
+                        fprintf(out, "; _lamo_match_done = 1;\n");
+                    }
+                    fprintf(out, "}\n");
+                } else if (ms->sema_enum_name && pat->sema_variant_index >= 0) {
+                    /* Tagged ctor arm: tag check + payload extraction
+                     * (explicit-stack DFS, same shape as the statement
+                     * emitter). */
+                    fprintf(out, "if (lamo_enum_tag_is(_lamo_match_scrut, %d)) {\n",
+                            pat->sema_variant_index);
+                    int open_blocks = 1;
+                    LamoPattern* stack_pat[64];
+                    char stack_expr[64][64];
+                    int stack_idx[64];
+                    int sp = 0;
+                    for (int c = pat->child_count - 1; c >= 0; c--) {
+                        stack_pat[sp] = pat->children[c];
+                        snprintf(stack_expr[sp], sizeof(stack_expr[sp]), "_lamo_match_scrut");
+                        stack_idx[sp] = c;
+                        sp++;
+                    }
+                    while (sp > 0) {
+                        sp--;
+                        LamoPattern* cp = stack_pat[sp];
+                        int cidx = stack_idx[sp];
+                        const char* pexpr = stack_expr[sp];
+                        if (!cp) continue;
+                        if (cp->kind == LAMO_PATTERN_BINDING) {
+                            fprintf(out, "LamoValue %s = lamo_enum_payload(%s, %d);\n",
+                                    user_name1(cp->name), pexpr, cidx);
+                            fprintf(out, "(void)%s;\n", user_name1(cp->name));
+                        } else if (cp->kind == LAMO_PATTERN_LITERAL) {
+                            fprintf(out, "if (lamo_is_truthy(lamo_equal(lamo_enum_payload(%s, %d), ",
+                                    pexpr, cidx);
+                            generate_expression_code(cp->literal, out);
+                            fprintf(out, "))) {\n");
+                            open_blocks++;
+                        } else if (cp->kind == LAMO_PATTERN_CTOR) {
+                            char tmp[48];
+                            snprintf(tmp, sizeof(tmp), "_lamo_pat_%d", pat_temp_id++);
+                            fprintf(out, "LamoValue %s = lamo_enum_payload(%s, %d);\n",
+                                    tmp, pexpr, cidx);
+                            fprintf(out, "if (lamo_enum_tag_is(%s, %d)) {\n",
+                                    tmp, cp->sema_variant_index);
+                            open_blocks++;
+                            for (int c = cp->child_count - 1; c >= 0; c--) {
+                                stack_pat[sp] = cp->children[c];
+                                snprintf(stack_expr[sp], sizeof(stack_expr[sp]), "%s", tmp);
+                                stack_idx[sp] = c;
+                                sp++;
+                            }
+                        }
+                    }
+                    if (guard) {
+                        fprintf(out, "if (lamo_is_truthy(");
+                        generate_expression_code(guard, out);
+                        fprintf(out, ")) { _lamo_match_val = ");
+                        if (ms->bodies[i]) generate_expression_code(ms->bodies[i], out);
+                        else fprintf(out, "lamo_make_int(0)");
+                        fprintf(out, "; _lamo_match_done = 1; }\n");
+                    } else {
+                        fprintf(out, "_lamo_match_val = ");
+                        if (ms->bodies[i]) generate_expression_code(ms->bodies[i], out);
+                        else fprintf(out, "lamo_make_int(0)");
+                        fprintf(out, "; _lamo_match_done = 1;\n");
+                    }
+                    while (open_blocks > 0) {
+                        fprintf(out, "}\n");
+                        open_blocks--;
+                    }
+                } else {
+                    /* Untagged (or unstamped) ctor arm: compare the
+                     * variant index via structural equality. */
+                    fprintf(out, "if (lamo_is_truthy(lamo_equal(_lamo_match_scrut, ");
+                    if (pat->sema_variant_index >= 0) {
+                        fprintf(out, "lamo_make_int(%d))))", pat->sema_variant_index);
+                    } else {
+                        fprintf(out, "%s)))", user_name1(lamo_variant_short_name(pat->name)));
+                    }
+                    fprintf(out, " {\n");
+                    if (guard) {
+                        fprintf(out, "if (lamo_is_truthy(");
+                        generate_expression_code(guard, out);
+                        fprintf(out, ")) { _lamo_match_val = ");
+                        if (ms->bodies[i]) generate_expression_code(ms->bodies[i], out);
+                        else fprintf(out, "lamo_make_int(0)");
+                        fprintf(out, "; _lamo_match_done = 1; }\n");
+                    } else {
+                        fprintf(out, "_lamo_match_val = ");
+                        if (ms->bodies[i]) generate_expression_code(ms->bodies[i], out);
+                        else fprintf(out, "lamo_make_int(0)");
+                        fprintf(out, "; _lamo_match_done = 1;\n");
+                    }
+                    fprintf(out, "}\n");
+                }
+                fprintf(out, "}\n");
+            }
+            fprintf(out, "_lamo_match_val; })");
+            break;
+        }
         default:
             fprintf(out, "lamo_make_int(0)");
             break;

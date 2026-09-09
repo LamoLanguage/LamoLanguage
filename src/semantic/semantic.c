@@ -186,6 +186,10 @@ typedef struct {
 
 static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node);
 static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node);
+/* 2.8.0 (FU4): shared match validation (statement + expression forms);
+ * returns the LUB of the arm body types. */
+static LamoType semantic_validate_match(SemanticContext* ctx, ASTMatchStmt* ms,
+                                        ASTNode* node);
 /* Phase 2 struct registry lookup — referenced by the PR 6 constraint
  * catalogue defined further below (ast.h is already included via
  * semantic.h, so the types are complete here). */
@@ -3085,6 +3089,92 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
             break;
     }
 }
+/* ── 2.8.0 (FU4): match as an expression ────────────────────────────────
+ * Validation itself lives in the AST_MATCH_STMT case of
+ * semantic_visit_statement (unchanged since 2.7.0 — exhaustiveness,
+ * pattern resolution, guards, bindings all run exactly once through
+ * it). This wrapper runs that pass, then computes the VALUE type for
+ * the expression form (`let x = match ... { ... }`) as the least upper
+ * bound of the arm body types (SPEC §13).
+ * Statement-shaped bodies contribute no value — they are skipped here
+ * so their declarations are never re-visited. Expression bodies are
+ * pure to re-infer (inference defines nothing in any scope), so the
+ * extra pass is safe; a program with errors may report duplicates, but
+ * it fails either way.
+ * When every typed arm is an enum constructor of the SAME enum head,
+ * the head is stamped on the match node (e.g. "Option") so the
+ * let-annotation head check and call-site degraded-enum acceptance
+ * (FU5) treat the whole match as that enum's type. */
+static LamoType semantic_validate_match(SemanticContext* ctx, ASTMatchStmt* ms,
+                                        ASTNode* node) {
+    semantic_visit_statement(ctx, node);
+    LamoType lub = LAMO_TYPE_UNKNOWN;
+    int lub_mismatch = 0;
+    const char* shared_head = NULL;
+    int same_head = 1;
+    for (int i = 0; i < ms->arm_count; i++) {
+        ASTNode* body = ms->bodies[i];
+        if (!body) continue;
+        switch (body->type) {
+            case AST_BLOCK: case AST_VAR_DECL: case AST_FN_DECL:
+            case AST_ENUM_DECL: case AST_IF_STMT: case AST_WHILE_STMT:
+            case AST_FOR_STMT: case AST_RETURN_STMT: case AST_BREAK_STMT:
+            case AST_CONTINUE_STMT: case AST_ASSIGN_STMT: case AST_CALL_STMT:
+            case AST_IMPORT: case AST_PLACE_ASSIGN_STMT: case AST_IMPL_DECL:
+            case AST_STRUCT_DECL:
+                continue;  /* statement body: no value contribution */
+            default:
+                break;
+        }
+        /* Recreate the arm's binding scope (the statement pass popped
+         * its own): payload bindings must be visible while inferring
+         * the body's value type — `Some(n) => n * 2`. */
+        LamoPattern* leaf_bindings[LAMO_MAX_PATTERN_BINDINGS];
+        int nb = 0;
+        if (ms->patterns[i]) {
+            lamo_pattern_collect_bindings(ms->patterns[i], leaf_bindings,
+                                          LAMO_MAX_PATTERN_BINDINGS, &nb);
+        }
+        Scope* parent = ctx->current_scope;
+        if (nb > 0) {
+            ctx->current_scope = scope_push(parent);
+            for (int b = 0; b < nb; b++) {
+                scope_define(ctx, ctx->current_scope, leaf_bindings[b]->name,
+                             SYMBOL_VAR, 0, LAMO_TYPE_UNKNOWN,
+                             leaf_bindings[b]->line, leaf_bindings[b]->column,
+                             node->file_path);
+            }
+        }
+        LamoType bt = semantic_infer_expression(ctx, body);
+        if (nb > 0) {
+            ctx->current_scope = parent;
+        }
+        if (bt == LAMO_TYPE_UNKNOWN || bt == LAMO_TYPE_VOID) continue;
+        if (bt == LAMO_TYPE_ENUM) {
+            const char* ft = body->sema_full_type;
+            if (!ft) {
+                same_head = 0;
+            } else {
+                char h[64];
+                ann_head(ft, h, sizeof(h));
+                if (!shared_head) shared_head = lamo_intern_type(h);
+                else if (strcmp(shared_head, h) != 0) same_head = 0;
+            }
+        }
+        if (lub_mismatch) continue;
+        if (lub == LAMO_TYPE_UNKNOWN) { lub = bt; continue; }
+        if (lub == bt) continue;
+        int numeric_pair = (lub == LAMO_TYPE_INT || lub == LAMO_TYPE_FLOAT) &&
+                           (bt == LAMO_TYPE_INT || bt == LAMO_TYPE_FLOAT);
+        if (numeric_pair) { lub = LAMO_TYPE_FLOAT; continue; }
+        lub_mismatch = 1;
+        lub = LAMO_TYPE_UNKNOWN;
+    }
+    if (lub == LAMO_TYPE_ENUM && same_head && shared_head) {
+        node->sema_full_type = shared_head;
+    }
+    return lub;
+}
 
 // Infer the compile-time type of an expression and run any operator-level
 // checks. Visits sub-expressions recursively. Returns LAMO_TYPE_UNKNOWN when
@@ -3782,6 +3872,14 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
             node->sema_struct_name = sl->struct_name;
             return LAMO_TYPE_STRUCT;
         }
+        case AST_MATCH_STMT:
+            /* 2.8.0 (FU4): match in EXPRESSION position — `let x = match
+             * ... { ... }`, `return match ...`, `print(match ...)`.
+             * Validation is shared with the statement form
+             * (semantic_validate_match routes through
+             * semantic_visit_statement); the expression's value is the
+             * least upper bound of the arm body types. */
+            return semantic_validate_match(ctx, (ASTMatchStmt*)node, node);
         default:
             // Recurse into statement-shaped nodes that can appear inside
             // expressions via legacy AST types we still keep for compat.

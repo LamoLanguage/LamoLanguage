@@ -1,0 +1,47 @@
+// 2.8.0 (FU4): match as an expression (SPEC §13) — `let x = match ...`,
+// `return match ...`, nesting inside arithmetic and call arguments.
+// Value threading through semantic (LUB of arm bodies), the C backend
+// (statement-expression accumulator), and the interpreter.
+enum Option<T> { Some(T), None }
+enum Color { Red, Green, Blue }
+
+let x = match 5 { 1 => 10, 5 => 50, _ => 0 }
+print(x)
+
+let label = match "b" { "a" => "ay", "b" => "bee", _ => "?" }
+print(label)
+
+let o = Some(7)
+let v = match o { Some(n) => n * 2, None => -1 }
+print(v)
+
+let nested = match Some(Some(3)) { Some(Some(n)) => n, Some(Some(x)) => x, _ => 0 }
+print(nested)
+
+fn pick(n: int) -> int {
+    return match n { 1 => 100, 2 => 200, _ => 300 }
+}
+print(pick(1))
+print(pick(2))
+print(pick(9))
+
+print(match true { true => "t", false => "f" })
+
+// a failed guard falls through to the wildcard
+let g = match 20 { 20 when false => "never", _ => "small" }
+print(g)
+
+// untagged enum scrutinee in expression position
+let c = Color::Green
+let name = match c { Color::Red => "r", Color::Green => "g", Color::Blue => "b" }
+print(name)
+
+// enum constructor arms give the match an enum-typed value
+let m = match 1 { 1 => Some(1), _ => None }
+print(m)
+
+// match expressions compose with operators
+print(1 + match 2 { 2 => 20, _ => 0 })
+
+// first match wins with duplicate literal arms
+print(match 3 { 3 => "first", 3 => "second", _ => "other" })

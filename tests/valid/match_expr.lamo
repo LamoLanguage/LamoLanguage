@@ -1,0 +1,12 @@
+// 2.8.0 (FU4): match expressions are valid in let initializers,
+// returns, call arguments, and binary operands.
+enum Option<T> { Some(T), None }
+let a = match 1 { 1 => 10, _ => 0 }
+let b: int = match 2 { 2 => 20, _ => 0 }
+fn f() -> int { return match 3 { 3 => 30, _ => 0 } }
+fn g(x: int) -> int { return x }
+let h = g(match 4 { 4 => 40, _ => 0 })
+let i = 1 + match 5 { 5 => 50, _ => 0 }
+let o = match 6 { 6 => Some(60), _ => None }
+print(a + b + f() + g(1) + h + i)
+print(o)

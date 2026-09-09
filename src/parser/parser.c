@@ -194,6 +194,11 @@ static void optional_semicolon(Parser* p) {
 
 ASTNode* parse_expression(Parser* p);
 static ASTNode* parse_primary(Parser* p);
+/* 2.8.0 (FU4): shared match-arm parser (statement + expression forms);
+ * defined with the statement parser, forward-declared here because
+ * parse_primary now starts a match expression. */
+static ASTNode* parse_match_arms(Parser* p, ASTNode* scrutinee,
+                                 int line, int column, int arms_are_expressions);
 
 /* Sprint 3: parse_postfix — handles `expr[index]` and `expr.prop` after
  * a primary expression. We treat both as left-associative postfix
@@ -735,6 +740,29 @@ static ASTNode* parse_primary(Parser* p) {
         int column = p->current.column;
         advance_p(p);
         return (ASTNode*)ast_new_bool_literal(0, line, column);
+    }
+    else if (p->current.type == TOKEN_MATCH) {
+        /* 2.8.0 (FU4): match as an EXPRESSION — `let x = match c { ... }`,
+         * `return match ...`, `print(match ...)`, `1 + (match ...)`.
+         * `match` is a reserved keyword (TOKEN_MATCH), so expression
+         * position is unambiguous — no scanner probe needed. Same
+         * no_struct_literal discipline as the statement form; arm
+         * bodies parse as expressions via the shared parse_match_arms. */
+        int line = p->current.line;
+        int column = p->current.column;
+        advance_p(p);
+        p->no_struct_literal = 1;
+        ASTNode* scrutinee = parse_expression(p);
+        p->no_struct_literal = 0;
+        if (!scrutinee) return parser_recover(p);
+        expect_p(p, TOKEN_LBRACE, "expected '{' to open match body");
+        if (p->panic_mode) {
+            ast_free(scrutinee);
+            return parser_recover(p);
+        }
+        ASTNode* node = parse_match_arms(p, scrutinee, line, column, 1);
+        if (!node) return parser_recover(p);
+        return node;
     }
     else if (p->current.type == TOKEN_IDENTIFIER) {
         char* name = strdup(p->current.value);
@@ -1311,6 +1339,150 @@ static LamoPattern* parse_pattern_ctx(Parser* p, int nested) {
 /* Top-level entry (arm pattern). */
 static LamoPattern* parse_pattern(Parser* p) {
     return parse_pattern_ctx(p, 0);
+}
+
+/* 2.8.0 (FU4): shared match-arm parser behind both the statement form
+ * (`match c { ... }`) and the new expression form (`let x = match c {
+ * ... }`). Each arm is a (pattern tree, guard, body) triple: patterns
+ * come from the recursive parse_pattern_ctx so nested payloads work,
+ * guards are the optional `when <expr>` between the pattern and `=>`.
+ * When arms_are_expressions is 1, arm bodies parse as EXPRESSIONS (a
+ * `{` body is a clear error — Lamo has no block expressions);
+ * otherwise they parse as single statements (bare blocks allowed).
+ * Takes ownership of `scrutinee` (frees it on every error path).
+ * Returns an AST_MATCH_STMT node, or NULL on a registered error
+ * (caller recovers). */
+static ASTNode* parse_match_arms(Parser* p, ASTNode* scrutinee,
+                                 int line, int column, int arms_are_expressions) {
+    LamoPattern** patterns = NULL;
+    ASTNode** guards = NULL;
+    ASTNode** bodies = NULL;
+    int arm_count = 0;
+    while (p->current.type != TOKEN_RBRACE && p->current.type != TOKEN_EOF) {
+        LamoPattern* pat = parse_pattern(p);
+        if (!pat) {
+            for (int i = 0; i < arm_count; i++) {
+                ast_pattern_free(patterns[i]);
+                if (guards[i]) ast_free(guards[i]);
+                ast_free(bodies[i]);
+            }
+            free(patterns); free(guards); free(bodies);
+            ast_free(scrutinee);
+            return NULL;
+        }
+        /* 2.7.0 (FU2): optional `when` guard. `when` is contextual
+         * (SPEC §4.6): it starts a guard only when an expression
+         * follows — `when => ...` still parses `when` as a variant
+         * name (handled above by parse_pattern_ctx) and a trailing
+         * `when` before ',' or '}' cannot start a guard either. */
+        ASTNode* guard = NULL;
+        if (p->current.type == TOKEN_IDENTIFIER &&
+            strcmp(p->current.value, "when") == 0) {
+            LamoTokenType after = parser_peek_next_type(p);
+            if (after != TOKEN_FAT_ARROW && after != TOKEN_COMMA &&
+                after != TOKEN_RBRACE && after != TOKEN_EOF) {
+                advance_p(p);  /* consume 'when' */
+                guard = parse_expression(p);
+            }
+        }
+        expect_p(p, TOKEN_FAT_ARROW, "expected '=>' in match arm");
+        if (p->panic_mode && !guard) {
+            ast_pattern_free(pat);
+            for (int i = 0; i < arm_count; i++) {
+                ast_pattern_free(patterns[i]);
+                if (guards[i]) ast_free(guards[i]);
+                ast_free(bodies[i]);
+            }
+            free(patterns); free(guards); free(bodies);
+            ast_free(scrutinee);
+            return NULL;
+        }
+        if (arms_are_expressions && p->current.type == TOKEN_LBRACE) {
+            parser_error_with_hint(p,
+                "match expression arms take an expression, not a block",
+                "use the statement form of match for block bodies, or precompute the value in a `let`");
+            ast_pattern_free(pat);
+            if (guard) ast_free(guard);
+            for (int i = 0; i < arm_count; i++) {
+                ast_pattern_free(patterns[i]);
+                if (guards[i]) ast_free(guards[i]);
+                ast_free(bodies[i]);
+            }
+            free(patterns); free(guards); free(bodies);
+            ast_free(scrutinee);
+            return NULL;
+        }
+        /* Arm body: a single statement in statement position (so the
+         * user can write `Red => print("red");` or a bare block), a
+         * plain expression in expression position. */
+        ASTNode* body = arms_are_expressions ? parse_expression(p) : parse_statement(p);
+        {
+            LamoPattern** p_r = realloc(patterns, sizeof(LamoPattern*) * (size_t)(arm_count + 1));
+            if (!p_r) {
+                parser_error(p, "out of memory while growing match arm list");
+                ast_pattern_free(pat);
+                if (guard) ast_free(guard);
+                ast_free(body);
+                for (int i = 0; i < arm_count; i++) {
+                    ast_pattern_free(patterns[i]);
+                    if (guards[i]) ast_free(guards[i]);
+                    ast_free(bodies[i]);
+                }
+                free(patterns); free(guards); free(bodies);
+                ast_free(scrutinee);
+                return NULL;
+            }
+            patterns = p_r;
+        }
+        {
+            ASTNode** g_r = realloc(guards, sizeof(ASTNode*) * (size_t)(arm_count + 1));
+            if (!g_r) {
+                parser_error(p, "out of memory while growing match arm list");
+                ast_pattern_free(pat);
+                if (guard) ast_free(guard);
+                ast_free(body);
+                for (int i = 0; i < arm_count; i++) {
+                    ast_pattern_free(patterns[i]);
+                    if (guards[i]) ast_free(guards[i]);
+                    ast_free(bodies[i]);
+                }
+                free(patterns); free(guards); free(bodies);
+                ast_free(scrutinee);
+                return NULL;
+            }
+            guards = g_r;
+        }
+        {
+            ASTNode** b_r = realloc(bodies, sizeof(ASTNode*) * (size_t)(arm_count + 1));
+            if (!b_r) {
+                parser_error(p, "out of memory while growing match arm list");
+                ast_pattern_free(pat);
+                if (guard) ast_free(guard);
+                ast_free(body);
+                for (int i = 0; i < arm_count; i++) {
+                    ast_pattern_free(patterns[i]);
+                    if (guards[i]) ast_free(guards[i]);
+                    ast_free(bodies[i]);
+                }
+                free(patterns); free(guards); free(bodies);
+                ast_free(scrutinee);
+                return NULL;
+            }
+            bodies = b_r;
+        }
+        patterns[arm_count] = pat;
+        guards[arm_count] = guard;
+        bodies[arm_count] = body;
+        arm_count++;
+        if (p->current.type == TOKEN_COMMA) advance_p(p);
+    }
+    expect_p(p, TOKEN_RBRACE, "missing '}' at end of match body");
+    ASTNode* node = (ASTNode*)ast_new_match_stmt_full(scrutinee, patterns, guards,
+                                                       bodies, arm_count, line, column);
+    /* The AST deep-copied nothing — it took ownership of the trees,
+     * guards and bodies — so only the input ARRAYS are ours. */
+    free(patterns); free(guards); free(bodies);
+    return node;
 }
 
 static ASTNode* parse_block(Parser* p) {
@@ -2036,124 +2208,16 @@ ASTNode* parse_statement(Parser* p) {
         ASTNode* scrutinee = parse_expression(p);
         p->no_struct_literal = 0;
         expect_p(p, TOKEN_LBRACE, "expected '{' to open match body");
-        /* 2.7.0 (FU2): each arm is a (pattern tree, guard, body) triple.
-         * Patterns are parsed by the recursive parse_pattern_ctx so
-         * nested payloads (`Some(Pair(a, b))`) work; guards are the
-         * optional `when <expr>` between the pattern and `=>`. */
-        LamoPattern** patterns = NULL;
-        ASTNode** guards = NULL;
-        ASTNode** bodies = NULL;
-        int arm_count = 0;
-        while (p->current.type != TOKEN_RBRACE && p->current.type != TOKEN_EOF) {
-            LamoPattern* pat = parse_pattern(p);
-            if (!pat) {
-                for (int i = 0; i < arm_count; i++) {
-                    ast_pattern_free(patterns[i]);
-                    if (guards[i]) ast_free(guards[i]);
-                    ast_free(bodies[i]);
-                }
-                free(patterns); free(guards); free(bodies);
-                ast_free(scrutinee);
-                return parser_recover(p);
-            }
-            /* 2.7.0 (FU2): optional `when` guard. `when` is contextual
-             * (SPEC §4.6): it starts a guard only when an expression
-             * follows — `when => ...` still parses `when` as a variant
-             * name (handled above by parse_pattern_ctx) and a trailing
-             * `when` before ',' or '}' cannot start a guard either. */
-            ASTNode* guard = NULL;
-            if (p->current.type == TOKEN_IDENTIFIER &&
-                strcmp(p->current.value, "when") == 0) {
-                LamoTokenType after = parser_peek_next_type(p);
-                if (after != TOKEN_FAT_ARROW && after != TOKEN_COMMA &&
-                    after != TOKEN_RBRACE && after != TOKEN_EOF) {
-                    advance_p(p);  /* consume 'when' */
-                    guard = parse_expression(p);
-                }
-            }
-            expect_p(p, TOKEN_FAT_ARROW, "expected '=>' in match arm");
-            if (p->panic_mode && !guard) {
-                ast_pattern_free(pat);
-                for (int i = 0; i < arm_count; i++) {
-                    ast_pattern_free(patterns[i]);
-                    if (guards[i]) ast_free(guards[i]);
-                    ast_free(bodies[i]);
-                }
-                free(patterns); free(guards); free(bodies);
-                ast_free(scrutinee);
-                return parser_recover(p);
-            }
-            /* Arm body: parse a single statement. We use parse_statement
-             * so the user can write `Red => print("red");` or
-             * `Red => { print("red"); print("!"); }`. */
-            ASTNode* body = parse_statement(p);
-            {
-                LamoPattern** p_r = realloc(patterns, sizeof(LamoPattern*) * (size_t)(arm_count + 1));
-                if (!p_r) {
-                    parser_error(p, "out of memory while growing match arm list");
-                    ast_pattern_free(pat);
-                    if (guard) ast_free(guard);
-                    ast_free(body);
-                    for (int i = 0; i < arm_count; i++) {
-                        ast_pattern_free(patterns[i]);
-                        if (guards[i]) ast_free(guards[i]);
-                        ast_free(bodies[i]);
-                    }
-                    free(patterns); free(guards); free(bodies);
-                    ast_free(scrutinee);
-                    return parser_recover(p);
-                }
-                patterns = p_r;
-            }
-            {
-                ASTNode** g_r = realloc(guards, sizeof(ASTNode*) * (size_t)(arm_count + 1));
-                if (!g_r) {
-                    parser_error(p, "out of memory while growing match arm list");
-                    ast_pattern_free(pat);
-                    if (guard) ast_free(guard);
-                    ast_free(body);
-                    for (int i = 0; i < arm_count; i++) {
-                        ast_pattern_free(patterns[i]);
-                        if (guards[i]) ast_free(guards[i]);
-                        ast_free(bodies[i]);
-                    }
-                    free(patterns); free(guards); free(bodies);
-                    ast_free(scrutinee);
-                    return parser_recover(p);
-                }
-                guards = g_r;
-            }
-            {
-                ASTNode** b_r = realloc(bodies, sizeof(ASTNode*) * (size_t)(arm_count + 1));
-                if (!b_r) {
-                    parser_error(p, "out of memory while growing match arm list");
-                    ast_pattern_free(pat);
-                    if (guard) ast_free(guard);
-                    ast_free(body);
-                    for (int i = 0; i < arm_count; i++) {
-                        ast_pattern_free(patterns[i]);
-                        if (guards[i]) ast_free(guards[i]);
-                        ast_free(bodies[i]);
-                    }
-                    free(patterns); free(guards); free(bodies);
-                    ast_free(scrutinee);
-                    return parser_recover(p);
-                }
-                bodies = b_r;
-            }
-            patterns[arm_count] = pat;
-            guards[arm_count] = guard;
-            bodies[arm_count] = body;
-            arm_count++;
-            if (p->current.type == TOKEN_COMMA) advance_p(p);
+        if (p->panic_mode) {
+            ast_free(scrutinee);
+            return parser_recover(p);
         }
-        expect_p(p, TOKEN_RBRACE, "missing '}' at end of match body");
+        /* 2.8.0 (FU4): the arm loop is shared with the expression form
+         * (parse_match_arms); statement-position arm bodies remain
+         * single statements (bare blocks allowed). */
+        ASTNode* node = parse_match_arms(p, scrutinee, line, column, 0);
+        if (!node) return parser_recover(p);
         if (p->current.type == TOKEN_SEMICOLON) advance_p(p);
-        ASTNode* node = (ASTNode*)ast_new_match_stmt_full(scrutinee, patterns, guards,
-                                                           bodies, arm_count, line, column);
-        /* The AST deep-copied nothing — it took ownership of the trees,
-         * guards and bodies — so only the input ARRAYS are ours. */
-        free(patterns); free(guards); free(bodies);
         return node;
     }
     else if (p->current.type == TOKEN_IDENTIFIER) {
