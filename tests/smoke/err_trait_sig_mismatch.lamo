@@ -1,0 +1,7 @@
+trait Shape {
+    fn name() -> string;
+}
+struct Circle { r: float }
+impl Shape for Circle {
+    fn name() -> int { return 1 }
+}

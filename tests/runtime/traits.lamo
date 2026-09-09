@@ -1,0 +1,55 @@
+// 2.9.0 traits — runtime demo: declarations, impls, method calls and
+// trait-constrained generic call sites (SPEC §3.6 / §7.8).
+// Method calls on trait-impl methods resolve through the same machinery
+// as inherent methods (erasure: everything emits lamo_method_<T>__<n>).
+
+trait Shape {
+    fn area() -> float;
+    fn name() -> string;
+}
+
+trait Described {
+    fn describe(prefix: string) -> string;
+}
+
+struct Circle { r: float }
+struct Square { side: float }
+struct Tagged { label: string, value: int }
+
+impl Shape for Circle {
+    fn area() -> float { return 3.14159 * self.r * self.r }
+    fn name() -> string { return "circle" }
+}
+
+impl Shape for Square {
+    fn area() -> float { return self.side * self.side }
+    fn name() -> string { return "square" }
+}
+
+impl Described for Circle {
+    fn describe(prefix: string) -> string { return prefix + "circle" }
+}
+
+impl Described for Tagged {
+    fn describe(prefix: string) -> string { return prefix + self.label }
+}
+
+// A trait impl may ALSO carry extra (inherent) methods.
+impl Shape for Tagged {
+    fn area() -> float { return 0.0 + self.value }
+    fn name() -> string { return self.label }
+    fn double() -> int { return self.value * 2 }
+}
+
+let c = Circle { r: 2.0 }
+let s = Square { side: 3.0 }
+let t = Tagged { label: "tag", value: 21 }
+
+print(c.area())
+print(c.name())
+print(s.area())
+print(s.name())
+print(c.describe("a "))
+print(t.describe("b "))
+print(t.area())
+print(t.double())

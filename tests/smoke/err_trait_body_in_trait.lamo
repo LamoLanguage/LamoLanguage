@@ -1,0 +1,5 @@
+trait Shape {
+    fn area() -> float {
+        return 1.0
+    }
+}

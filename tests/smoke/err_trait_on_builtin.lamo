@@ -1,0 +1,5 @@
+trait Shape {
+    fn area() -> float;
+}
+fn grab<T: Shape>(x: T) -> int { return 1 }
+grab(5)

@@ -1,0 +1,4 @@
+struct Circle { r: float }
+impl Wibble for Circle {
+    fn area() -> float { return 1.0 }
+}

@@ -1,0 +1,1 @@
+duplicate impl of trait 'Shape' for struct 'Circle'

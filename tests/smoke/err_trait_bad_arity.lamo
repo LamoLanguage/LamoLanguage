@@ -1,0 +1,7 @@
+trait Shape {
+    fn area(scale: float) -> float;
+}
+struct Circle { r: float }
+impl Shape for Circle {
+    fn area() -> float { return 1.0 }
+}

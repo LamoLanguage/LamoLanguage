@@ -1,0 +1,45 @@
+// 2.9.0 traits — check-only surface: declarations, generic impl echo,
+// trait names accepted as constraints on fn/struct type parameters,
+// combined catalogue + trait constraints, order independence (trait
+// declared after the impl that references it).
+//
+//     trait Shape { ... }
+//     impl<T> Container for Stack<T> { ... }
+//     fn describe<T: Shape>(...) ...
+//     struct Box2<T: Described> { ... }
+
+trait Shape {
+    fn area() -> float;
+}
+
+struct Stack<T> { items: array<T>, top: int }
+
+impl<T> Shape for Stack<T> {
+    fn area() -> float { return 0.0 + self.top }
+}
+
+// Trait declared AFTER the generic fn that references it: traits
+// resolve order-independently (same hoisting semantics as structs).
+fn first_ok<T: Described>(x: T) -> int { return 1 }
+
+trait Described {
+    fn describe(prefix: string) -> string;
+}
+
+struct Box2<T: Described> { item: T }
+
+struct Plain { x: int }
+impl Described for Plain {
+    fn describe(prefix: string) -> string { return prefix }
+}
+
+fn area_sum<A: Shape, B: Shape>(p: A, q: B) -> float {
+    return 0.0
+}
+
+let st: Stack<int> = Stack<int> { items: [], top: 4 }
+let pl = Plain { x: 1 }
+let b: Box2<Plain> = Box2<Plain> { item: pl }
+print(st.area())
+print(first_ok(pl))
+print(area_sum(st, st))

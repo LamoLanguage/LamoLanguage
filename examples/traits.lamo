@@ -1,0 +1,50 @@
+// Traits (2.9.0) — contracts + first-class constraints.
+// Run: ./lamo run examples/traits.lamo
+
+trait Shape {
+    fn area() -> float
+    fn name() -> string
+}
+
+trait Described {
+    fn describe(prefix: string) -> string
+}
+
+struct Circle { r: float }
+struct Square { side: float }
+
+impl Shape for Circle {
+    fn area() -> float { return 3.14159 * self.r * self.r }
+    fn name() -> string { return "circle" }
+}
+
+impl Shape for Square {
+    fn area() -> float { return self.side * self.side }
+    fn name() -> string { return "square" }
+}
+
+impl Described for Circle {
+    fn describe(prefix: string) -> string { return prefix + "circle with area above" }
+}
+
+impl Described for Square {
+    fn describe(prefix: string) -> string { return prefix + "square" }
+}
+
+// Trait names are constraints: every call site is checked against the
+// impl registry. Swap Circle for a type without `impl Shape for ...`
+// and this file stops compiling.
+fn area_of<T: Shape>(s: T) -> float {
+    return 0.0
+}
+
+let c = Circle { r: 2.0 }
+let s = Square { side: 3.0 }
+
+print(c.area())
+print(c.name())
+print(s.area())
+print(s.name())
+print(c.describe("a "))
+print(area_of(c))
+print(area_of(s))

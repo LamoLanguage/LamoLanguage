@@ -1,0 +1,6 @@
+trait Shape {
+    fn area() -> float;
+}
+struct Plain { x: int }
+fn describe<T: Shape>(s: T) -> int { return 1 }
+describe(Plain { x: 5 })
