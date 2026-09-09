@@ -198,6 +198,9 @@ Next up (see [`roadmap.md`](roadmap.md) and [`todo.md`](todo.md) for the full pi
 - [x] 2.6.0 follow-ups: enum type annotations, nested match patterns +
       `when` guards, `Enum::Variant` qualification, `pub` step 2 enforcement,
       Windows eval-suite parity in `run_tests.ps1`
+- [x] 2.7.0 follow-ups: eval/REPL enum support, match literal patterns,
+      match as an expression, enum annotation type-arg invariance,
+      full `run_tests.ps1` parity (smoke/golden/std + `.stdin`)
 - [ ] Traits
 - [ ] Better formatter (AST-based pretty-printer)
 - [ ] Language Server (LSP)

@@ -580,9 +580,36 @@ match color {
   condition, so it does not count as covering its variant (the
   non-exhaustive diagnostic keeps its historical `warning:` wording but
   remains fatal, as in 2.6.0).
-- Today, untagged `match` only supports variant equality (now
-  collision-safe: arms compare the variant's INDEX, not the shadowable
-  bare-variant global). Literal patterns remain future work (§13).
+- **Literal patterns (2.8.0):** an arm pattern may also be a literal —
+  `1 => ...`, `-2 => ...`, `1.5 => ...`, `"a" => ...`, `true`/`false` —
+  at any pattern depth, including inside a payload list
+  (`Some(Some(3)) => ...`, `Rect(10, _) => ...`). A literal pattern
+  compares the scrutinee (or the pulled payload) with the same
+  structural equality as `==` (§7.5): numeric pairs coerce in both
+  directions (`match 5 { 5.0 => ... }` matches), strings and bools
+  compare exactly, enum values compare tag-then-payload-wise. Literal
+  arms bind nothing, never count toward variant exhaustiveness (like
+  guarded arms), and are statically type-checked against the scrutinee
+  when its type is a known builtin (`"a" =>` against an `int`
+  scrutinee is a compile error). A literal followed by `(` is a
+  syntax error — literals cannot bind payloads.
+- **Match as an expression (2.8.0):** `match` may also appear in any
+  expression position — `let x = match c { 1 => 10, _ => 20 };`,
+  `return match ...`, `print(match ...)`, `1 + (match ...)`. The
+  expression's value is the matched arm's body value, and the
+  expression's type is the least upper bound of the arm body types
+  (numeric arms widen to `float`; heterogeneous arms defer to
+  `unknown`). When every typed arm is a constructor of the same enum,
+  the match carries that enum as its type head for annotation checks
+  (§3.5). Expression-form arms take an EXPRESSION, not a block — Lamo
+  has no block expressions (use the statement form for `{ }` bodies).
+  A non-exhaustive match that fails at runtime (only possible with
+  literal arms or guards, since exhaustiveness is checked statically
+  otherwise) yields the default value `0` in both backends — there is
+  no runtime "unmatched" error.
+- Untagged `match` supports variant equality (collision-safe: arms
+  compare the variant's INDEX, not the shadowable bare-variant
+  global) and literal patterns on the same else-if desugar.
 
 ### 4.7 Assignment
 
@@ -1220,13 +1247,19 @@ loading, which had become the single biggest workflow gap between them:
   its members callable for the rest of the session.
 - Generic type arguments on module calls are erased in eval, exactly as
   in the C backend.
-- What eval/repl still do NOT support: the full struct/array value model
-  and `match` (pre-existing interpreter limitations, unchanged in 2.6.0).
-  Programs using those need `lamo run`.
+- **2.8.0:** eval/REPL evaluate enum declarations, constructor calls,
+  and `match` (tagged and untagged), with value parity verified by the
+  eval suite — `EVAL_VAL_ENUM` mirrors the C runtime's tagged-union
+  representation, and the interpreter keeps an enum registry so the
+  REPL (which runs no semantic pass) resolves variants exactly like
+  the compiler.
+- What eval/repl still do NOT support: the struct/array value model
+  (the last interpreter limitation). Programs using those still need
+  `lamo run`.
 
 The old `"module member 'math.sqrt' is not available in eval/repl mode"
 error no longer exists. If a snippet uses constructs the interpreter
-does not model (structs, match), eval says so at the runtime-error site
+does not model (structs, arrays), eval says so at the runtime-error site
 as before.
 
 **Decision (revised 2.6.0):** `eval`/`repl` and `run` are distinct paths
@@ -1238,11 +1271,11 @@ declarations the loader produces; no registry was duplicated and no GCC
 step was added.
 
 **Migrating from `eval` to `run`:** if a snippet uses constructs the
-interpreter does not model (structs, arrays, match), save it to a `.lamo`
+interpreter does not model (structs, arrays), save it to a `.lamo`
 file and run it with `lamo run file.lamo`. The language semantics are
 otherwise identical between the two paths — the interpreter implements
-the same value model, truthiness rules, and runtime errors as the
-transpiler.
+the same value model (including enums and match since 2.8.0), truthiness
+rules, and runtime errors as the transpiler.
 
 ---
 
@@ -1371,10 +1404,10 @@ this spec. When they ship, this spec will be updated.
 
 - **First-class functions / closures** — `let f = fn(x) { ... }`.
 - **Iterator protocol** — `for x in arr { ... }`.
-- **Pattern matching beyond variants** — literal patterns, OR-patterns,
-  match as an expression (the current `match` is statement-only). Nested
-  payload destructuring, `when` guards, and `Enum::Variant` qualification
-  **shipped in 2.7.0** (§3.5, §4.6).
+- **Pattern matching beyond variants** — OR-patterns, range patterns,
+  binding patterns at the top level. Literal patterns, nested payload
+  destructuring, `when` guards, `Enum::Variant` qualification, and
+  match as an expression **shipped in 2.7.0/2.8.0** (§3.5, §4.6).
 - **Exception / error-handling mechanism** — likely `Result<T, E>` based, not
   throw/catch.
 - **Forward declarations** for mutual recursion.
@@ -1424,3 +1457,17 @@ this spec. When they ship, this spec will be updated.
   included); `run_tests.ps1` gained the eval-cases section (§10.7 parity
   with `tests/run_tests.sh`). Statement-position constructor calls fixed
   to emit real tagged values.
+- **v1.5** (compiler 2.8.0) — the 2.7.0 Open Follow-Ups ledger closed:
+  eval/REPL enum support (§10.7 — `EVAL_VAL_ENUM`, interpreter enum
+  registry, `match` evaluation with run parity); literal patterns in
+  `match` (§4.6 — int/float/string/bool at any depth, bidirectional
+  numeric coercion, static scrutinee type checks); match as an
+  expression (§4.6 — value threading with arm-body LUB typing);
+  enum annotation type-arg invariance at call sites (§3.5/§7.7 —
+  partially-inferable enums complete against annotations, payload-bound
+  params enforce invariance, degraded bare-enum types defer); full
+  `run_tests.ps1` parity (smoke/golden/std sections + runtime `.stdin`).
+  Also fixed en route: a latent 2.7.0 bug generating invalid C for
+  guarded untagged `match` arms, feature-detection blindness for
+  expressions inside `match`/struct literals, and the spurious
+  "expected 'Option<int>', got 'enum'" rejection of bare unit variants.

@@ -99,8 +99,10 @@ formalized in `docs/ARCHITECTURE.md`.
 - **src/codegen/lamo_runtime_data.{c,h}** — Auto-generated embedded-string
   version of `lamo_runtime.h`. Regenerate with `python3 scripts/embed_runtime.py`.
 - **src/eval/eval.c** — Tree-walking AST interpreter. Powers `lamo eval` and
-  `lamo repl`. Independent of the C codegen backend and intentionally
-  module-less (see SPEC §10.7).
+  `lamo repl`. Independent of the C codegen backend; loads modules through
+  the same loader as `run` (SPEC §10.7). 2.8.0: evaluates enums and match
+  with run parity (`EVAL_VAL_ENUM` + an enum registry that backs the REPL,
+  which runs no semantic pass).
 - **src/lampm/** — Integrated package manager. Compiled into the main `lamo`
   executable; reachable through `lamo install`, `lamo update`, `lamo list`,
   etc. The single public entry point is `lampm_main()` (see
@@ -182,7 +184,13 @@ formalized in `docs/ARCHITECTURE.md`.
   call-site binding), and `Enum::Variant` QUALIFICATION with legal
   cross-enum "later wins" collisions + shadow warning (variant globals
   are deduped in generated C; untagged match arms compare the variant
-  index).
+  index). 2.8.0: LITERAL PATTERNS (`match x { 1 => ..., "a" => ... }`,
+  negative numerics, any depth — compared with `lamo_equal` semantics,
+  static scrutinee type checks), MATCH AS AN EXPRESSION (`let x = match
+  c { ... }` — arm bodies are expressions; the statement form keeps
+  block bodies), and enum annotation type-arg INVARIANCE at call sites
+  (partially-inferable enums like `enum E<T, U> { V(T) }` complete
+  against the expected annotation instead of degrading unchecked).
 - Export markers (2.6.0): contextual `pub` on top-level declarations
   (`pub fn ...`). 2.7.0 (§10.6 step 2): non-`pub` members accessed through
   a module alias are a compile ERROR — all shipped `std/` modules mark

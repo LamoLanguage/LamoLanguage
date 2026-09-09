@@ -29,6 +29,19 @@ track *what it means*.
 
 ## Release Highlights
 
+**2.8.0** — the 2.7.0 Open Follow-Ups ledger closed: eval/REPL enum support
+(`EVAL_VAL_ENUM` + an interpreter enum registry — enum declarations,
+constructor calls, and `match` now run under `lamo eval`/`lamo repl` with
+run parity), match literal patterns (`1 =>`, `"a" =>`, negative numerics,
+nested literals — plus the latent invalid-C bug for guarded untagged match
+arms it uncovered), match as an expression (`let x = match ...` value
+threading through semantic, the C backend, and the interpreter), enum
+annotation type-arg invariance at call sites (partially-inferable enums
+like `enum E<T, U> { V(T) }` complete against annotations instead of
+degrading unchecked), and the full `run_tests.ps1` parity (smoke, golden,
+and std sections plus runtime `.stdin` support on a real-exit-code process
+runner).
+
 **2.7.0** — the 2.6.0 Open Follow-Ups ledger closed: enum type annotations
 (`let o: Option<int>`, params/returns/fields with arg-count validation and
 ctor full-type inference), nested payload patterns + `when` guards in
@@ -81,18 +94,18 @@ Per-item detail lives in [`todo.md`](todo.md).
 
 ## Current Priorities
 
-The next meaningful work, in suggested order (the 2.6.0 follow-up ledger is
-closed — see the new [todo.md](todo.md) Open Follow-Ups for what 2.7.0
-discovered):
+The next meaningful work, in suggested order (the 2.7.0 follow-up ledger is
+closed in 2.8.0 — see [todo.md](todo.md) "Completed in 2.8.0"):
 
-1. **Eval/REPL enum support** — an `EVAL_VAL_ENUM` representation so the
-   interpreter can run enums/`match` like the C backend.
-2. **Windows runner completion** — smoke/golden/std sections and `.stdin`
-   support for `run_tests.ps1` (the eval section landed in 2.7.0).
-3. **Match literal patterns** and **match as an expression**.
-4. **Traits** — first-class constraints beyond the catalogue.
-5. **Better formatter** (AST-based pretty-printer), **LSP**, **VSCode
+1. **Traits** — first-class constraints beyond the catalogue.
+2. **Interpreter value-model completion** — arrays and structs in
+   `EVAL_VAL_*` (the last `lamo eval`/`lamo run` divergence; match and
+   enums reached parity in 2.8.0).
+3. **Better formatter** (AST-based pretty-printer), **LSP**, **VSCode
    extension**, **documentation website**.
+4. **Windows CI contributor** — `run_tests.ps1` is now section-complete;
+   a Windows host in CI would gate the parity the POSIX suite already
+   enforces.
 
 ## Guiding Principles
 

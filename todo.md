@@ -4,9 +4,10 @@ This file tracks implementation work per phase. Sprint 2.5.0 completed every
 outstanding item below; each completed row carries a short evidence note
 pointing at the code, docs, or tests that fulfill it. Sprint 2.6.0 completed
 the entire 2.5.0 **Open Follow-Ups** ledger; sprint 2.7.0 completed the
-2.6.0 **Open Follow-Ups** ledger (see "Completed in 2.7.0"); the
-**Open Follow-Ups** section below now lists genuinely new work discovered
-along the way.
+2.6.0 **Open Follow-Ups** ledger; sprint 2.8.0 completed the 2.7.0
+**Open Follow-Ups** ledger (see "Completed in 2.8.0"), so the
+**Open Follow-Ups** section below is empty again — new work goes through
+the roadmap's Current Priorities.
 
 ## Status Snapshot
 
@@ -27,26 +28,25 @@ along the way.
 | Cross-cutting work | ✅ Ongoing policy, currently honored |
 | Open Follow-Ups (2.5.0 ledger) | ✅ Complete (2.6.0) |
 | Open Follow-Ups (2.6.0 ledger) | ✅ Complete (2.7.0) |
+| Open Follow-Ups (2.7.0 ledger) | ✅ Complete (2.8.0) |
 
 ## Open Follow-Ups
 
-Honest ledger of work discovered but **not** completed in 2.7.0:
+Nothing outstanding — the 2.7.0 ledger closed in 2.8.0 (see below). New
+discovered work starts in `roadmap.md` Current Priorities and moves here
+when a sprint commits to it.
 
-- [ ] **Eval/REPL enum support** — the tree-walking interpreter still does
-      not evaluate `enum` declarations, constructor calls, or `match`
-      (silent no-op); programs using them need `lamo run`/`build`. Adding
-      an `EVAL_VAL_ENUM` representation is the prerequisite (SPEC §10.7).
-- [ ] **run_tests.ps1 remaining sections** — the eval section landed in
-      2.7.0; smoke, golden, std sections and runtime `.stdin` support are
-      still POSIX-only.
-- [ ] **Match literal patterns** — `match x { 1 => ..., "a" => ... }`
-      (SPEC §4.6/§13); guard-aware exhaustiveness is in, literals are not.
-- [ ] **Match as an expression** — `let x = match ... { ... }` needs value
-      threading through all three backends (SPEC §13).
-- [ ] **Enum annotation type-arg invariance at call sites** — annotated
-      enum params bind like generic signatures, but partially-inferable
-      multi-param enums (`enum E<T, U> { V(T) }`) degrade to the bare
-      enum name instead of a concrete full type.
+## Completed in 2.8.0
+
+Every item from the 2.7.0 Open Follow-Ups ledger, with evidence:
+
+| Item | Evidence |
+|------|----------|
+| **Eval/REPL enum support** — `EVAL_VAL_ENUM` + enum registry; the interpreter evaluates enum declarations, constructor calls, and `match` | eval.h/eval.c: `EVAL_VAL_ENUM` (tag + variant name + owned payloads) mirrors the C runtime's `LAMO_VALUE_ENUM`; untagged enums keep the int representation; the enum registry (later-wins bare lookup + exact `Enum::Variant`) backs the REPL where no sema stamps exist, while `lamo eval` prefers the stamps; match evaluates ctor/binding/nested/wildcard patterns with `when` guards and per-arm scopes; structural equality, always-truthy enums, and `Some(42)` rendering mirror `lamo_equal`/`lamo_value_to_owned_string`; the REPL sniffer accepts enum/match/struct/impl lines. Tests `tests/eval/enum_match.lamo` (+run parity); test: `let x = match Some(3) { Some(v) => v * 10, None => 0 }` works at the prompt |
+| **run_tests.ps1 remaining sections** — smoke, golden, std sections and runtime `.stdin` support | tests/run_tests.ps1 rewritten on a `System.Diagnostics.Process` workhorse (`Invoke-LamoProcess`: async pipe reads, stdin file, 10s cap, REAL exit code — the `Start-Job` version read `$LASTEXITCODE` in the parent session); smoke `.expect_err`/`.expect_ok`/bare contracts, golden temp-dir builds with the runtime-block filter, std "0 failed" contract, runtime `.stdin` redirection; `command_test` on Windows resolves the .ps1 through the same candidate list and forwards `-LamoPath`. Developed on POSIX (no Windows host in CI), section-by-section mirrored against run_tests.sh |
+| **Match literal patterns** — `match x { 1 => ..., "a" => ... }` | SPEC §4.6; `LAMO_PATTERN_LITERAL` owns an AST literal node (int/float/string/bool, negative numerics) parsed at any depth (`parse_pattern_ctx`); semantic type-checks literal arms against the scrutinee (numeric coercion both ways, enum scrutinees defer to runtime); codegen tagged path joins the done-flag desugar (incl. nested literal payload checks) and the legacy else-if chain — which exposed and fixed a latent 2.7.0 bug where guarded arms closed the `if` early and generated invalid C; feature detection (uses_builtin/detect_features) now walks matches (also struct literals + place-assign targets, previously invisible); eval compares via the structural equality. Tests `tests/runtime/match_literals{,_tagged}.lamo`, smoke `err_match_literal_type_mismatch.*`; golden `match_tagged.c.expected` regenerated for the correctly emitted `LAMO_NEEDS_STRING_OPS` |
+| **Match as an expression** — `let x = match ... { ... }` | SPEC §4.6/§13; shared `parse_match_arms` (statement bodies unchanged; expression bodies — a `{` body is a clear error); `semantic_validate_match` runs the unchanged statement validation then types the expression as the arm-body LUB (bindings re-scoped per arm; same-enum-head ctor arms stamp the head); codegen emits a GCC statement expression with `_lamo_match_val` accumulator + done-flag (statement emitter untouched, goldens byte-identical); eval threads the value via `eval_match_value(want_value=1)`. Tests `tests/runtime/match_expr.lamo`, `tests/valid/match_expr.lamo` |
+| **Enum annotation type-arg invariance at call sites** — partially-inferable multi-param enums no longer degrade unchecked | `enum_complete_degraded_full_type` re-binds type params from ctor payloads, fills the rest from the expected annotation, and enforces invariance (`enum 'E' type parameter 'T' is bound to 'int' ... but annotation says 'string'`); let annotations yield concrete `E<int, string>` with checked args; call-site args complete against param annotations before §7.7 binding (generic params like `E<int, U>` bind through); degraded bare-enum names defer in `call_types_compatible`; bare/qualified unit variants stamp the degraded full type (fixes the 2.7.0 spurious "expected 'Option<int>', got 'enum'" for `is_none(None)`). Tests `tests/runtime/enum_invariance.lamo`, smoke `err_enum_invariance_{let,callsite}.*` |
 
 ## Completed in 2.7.0
 
