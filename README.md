@@ -195,7 +195,7 @@ Runnable programs live in [`examples/`](examples/) and [`std/examples/`](std/exa
 
 ## Project Status
 
-The current implementation (v2.9.0) includes:
+The current implementation (v2.10.0) includes:
 
 - ✅ Lexer, parser, AST
 - ✅ Semantic analyzer (scopes, types, generics binding, constraints)
@@ -204,7 +204,13 @@ The current implementation (v2.9.0) includes:
 - ✅ Generics (PRs 1–6): generic functions/structs/impls, `array<T>`, constraints
 - ✅ Traits — `trait` declarations, `impl Trait for Type` with coherence,
   completeness and signature validation, and trait names as first-class
-  generic constraints (`T: Shape`) checked at call sites
+  generic constraints (`T: Shape`) checked at call sites; dictionary
+  dispatch lets trait methods run on type-parameter receivers inside
+  constrained generic fns (`fn draw<T: Shape>` calling `s.area()`),
+  statically, per call site
+- ✅ Full interpreter value model — arrays and structs run under
+  `lamo eval`/`lamo repl` with the same aliasing, methods, trait dispatch
+  and print semantics as the compiled backend
 - ✅ Tagged-union enums — payload variants, `Some(x) =>` match bindings,
   nested destructuring (`Some(Pair(a, b))`), `when` guards,
   `Enum::Variant` qualification, and enum type annotations
@@ -236,6 +242,7 @@ Next up (see [`roadmap.md`](roadmap.md) and [`todo.md`](todo.md) for the full pi
       match as an expression, enum annotation type-arg invariance,
       full `run_tests.ps1` parity (smoke/golden/std + `.stdin`)
 - [x] Traits
+- [x] Trait dictionary dispatch + interpreter value-model completion (2.10.0)
 - [ ] Better formatter (AST-based pretty-printer)
 - [ ] Language Server (LSP)
 - [ ] VSCode extension

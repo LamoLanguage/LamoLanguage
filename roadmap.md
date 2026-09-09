@@ -29,7 +29,23 @@ track *what it means*.
 
 ## Release Highlights
 
-**2.9.0** — TRAITS shipped, the roadmap's top priority: `trait Name {
+**2.10.0** — the roadmap's top two priorities shipped together:
+interpreter value-model completion (arrays and structs in `EVAL_VAL_*`
+— refcounted shared objects mirroring the backend's pointer semantics,
+with literal/index/method/trait-impl/aliasing parity and byte-for-byte
+`print` agreement on the eval suite) closed the last `lamo eval`/`lamo
+run` divergence, and trait dictionary dispatch (static per call site)
+made `s.area()` inside `fn draw<T: Shape>` compile to a resolved call:
+generated `LamoDict_<Trait>` structs of function pointers ride as
+hidden trailing parameters, call sites pass static instances built from
+the impl registry (or forward the enclosing fn's dictionary through
+generic→generic calls), and no runtime type tags are needed. En route:
+struct alias flow in semantic (`let q = p` keeps the struct identity),
+the chained array-len route (`self.items.len` no longer falls back to
+`lamo_make_int(0)`), and constraint-aware diagnostics for every
+non-dispatchable receiver shape.
+
+**2.9.0** — TRAITS shipped: `trait Name {
 fn sig; ... }` declarations and `impl Trait for Type { ... }` blocks
 validated for coherence (one impl per trait/struct pair), completeness
 (every required method present) and signature compatibility (strict
@@ -108,22 +124,16 @@ Per-item detail lives in [`todo.md`](todo.md).
 
 ## Current Priorities
 
-The next meaningful work, in suggested order (traits shipped in 2.9.0 —
-see the Release Highlights above):
+The next meaningful work, in suggested order (2.10.0 closed the
+value-model and dictionary-dispatch items — see the Release Highlights
+above):
 
-1. **Interpreter value-model completion** — arrays and structs in
-   `EVAL_VAL_*` (the last `lamo eval`/`lamo run` divergence; match and
-   enums reached parity in 2.8.0). Trait-impl method calls will ride the
-   same struct support.
-2. **Trait dictionary dispatch (static per call site)** — pass
-   trait-method dictionaries as hidden parameters to constrained generic
-   functions so `s.area()` inside `fn draw<T: Shape>` compiles to a
-   resolved call. Requires a small ABI extension for constrained generic
-   functions; no runtime type tags needed. This is the natural follow-up
-   to 2.9.0's checked contracts.
-3. **Better formatter** (AST-based pretty-printer), **LSP**, **VSCode
+1. **Trait dispatch polish** — impl-level trait constraints
+   (`impl<T: Shape> ...`), trait objects / existential parameters if a
+   use case appears, and dict-argument support on module-aliased calls.
+2. **Better formatter** (AST-based pretty-printer), **LSP**, **VSCode
    extension**, **documentation website**.
-4. **Windows CI contributor** — `run_tests.ps1` is now section-complete;
+3. **Windows CI contributor** — `run_tests.ps1` is now section-complete;
    a Windows host in CI would gate the parity the POSIX suite already
    enforces.
 

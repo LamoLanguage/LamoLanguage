@@ -30,12 +30,27 @@ the roadmap's Current Priorities.
 | Open Follow-Ups (2.6.0 ledger) | ✅ Complete (2.7.0) |
 | Open Follow-Ups (2.7.0 ledger) | ✅ Complete (2.8.0) |
 | Roadmap priority #1 — Traits | ✅ Complete (2.9.0) |
+| Roadmap priority #2 — Interpreter value model + trait dictionary dispatch | ✅ Complete (2.10.0) |
 
 ## Open Follow-Ups
 
 Nothing outstanding — the 2.7.0 ledger closed in 2.8.0 (see below). New
 discovered work starts in `roadmap.md` Current Priorities and moves here
 when a sprint commits to it.
+
+## Completed in 2.10.0
+
+Both roadmap priorities (interpreter value-model completion + trait
+dictionary dispatch), with evidence:
+
+| Item | Evidence |
+|------|----------|
+| **Interpreter value model — arrays + structs** (`EVAL_VAL_ARRAY`/`EVAL_VAL_STRUCT`) | eval.h: refcounted shared heap objects (`EvalArrayObj`/`EvalStructObj`) — `eval_value_clone` shares (C-backend aliasing parity: `let b = a` mutates together), `eval_value_free` decrefs, equality compares identity (mirrors `lamo_equal`); eval.c: array literals, indexing with negative wrap + backend-parity out-of-bounds message, `.len`/`push`/`pop` (member AND global forms per SPEC §8), struct literals (declared-field defaults, provided values placed by declaration index), field access/place-assign (incl. compound `+=`/`-=`), struct+impl registries (later-wins, impls ACCUMULATE like the compiler's `find_method`) so trait-impl methods dispatch in eval/REPL, truthiness via a shared `eval_is_truthy` helper (SPEC §6.3 parity), `print` rendering `Name { v0, v1 }` / `[a, b]`; registration in `eval_program`/`eval_load_module_program` pre-passes + statement flow. Tests `tests/eval/arrays_structs.lamo` (+ run parity byte-for-byte), ASan/UBSan clean |
+| **Trait dictionary dispatch (static per call site)** — `s.area()` inside `fn draw<T: Shape>` | semantic: member-call on a type-parameter receiver resolves through the trait's signature when the constraint is a declared trait — strict arity, argument compatibility wherever both sides annotate (type-parameter args deferred), the trait's return annotation stamps the call's full type; stamps `sema_trait_name`/`sema_tp_receiver`; call sites stamp hidden dictionaries via `stamp_trait_dicts` (one entry per trait-constrained type parameter: concrete struct head, or the enclosing fn's parameter name for forwarding); forwarding satisfaction (`enclosing_tp_satisfies_trait`) makes `draw(x)` legal inside `fn wrapper<T: Shape>`; an uninferable trait-constrained parameter is a compile error; codegen: `collect_trait_dicts` walk + `typedef struct { LamoValue (*m)(LamoValue, ...); } LamoDict_<Trait>` + static instances `lamo_dict_<Trait>_<Struct>` designated-initialized from the trait impl, hidden trailing parameters `LamoDict_<Trait>* _dict_T` on standalone generic fns (forward decls + definitions + `(void)` suppressions), `_dict_T->method(...)` receivers, call-site dict arguments (address-of instance or forwarded variable); catalogue constraints add no hidden parameters. Golden `tests/golden/traits_dispatch.c.expected` pins the ABI; tests `tests/runtime/traits_dispatch.lamo`, `tests/valid/traits_dispatch.lamo` (generic trait impl instantiations), eval parity |
+| **Constraint-aware diagnostics** — every non-dispatchable receiver shape | catalogue-constrained (`T: Num`) and unconstrained receivers keep honest errors with constraint-aware wording; missing trait method ("declare `fn shrink` in the trait"), arity mismatch against the trait signature, uninferable dictionary, and trait-constrained type parameters on impl METHODS (rejected — the method-call ABI keeps the erased shape) with a standalone-fn workaround. Smoke `err_trait_{method_unknown_in_trait,catalogue_no_dispatch,unconstrained_dispatch,dict_uninferred,constraint_on_method}.*` |
+| **Struct alias flow in semantic** — `let q = p` keeps the struct identity | `AST_VAR_DECL` propagation: an identifier initializer contributes its symbol's struct name (or the declared-struct head of its full type) — previously method calls through an alias failed with "cannot call method ... on value of type 'struct'" on BOTH backends (verified against the 2.9.0 binary); covered by `tests/eval/arrays_structs.lamo` aliasing block |
+| **Chained array-len route** — `self.items.len` / `b.items.len` | semantic stamps the `sema_full_type == "array"` route marker on `.len` accesses whose object is an array-typed chain (the same convention member calls already use); codegen honors the marker before the struct-field route (previously emitted the defensive `lamo_make_int(0)`); covered by `tests/eval/arrays_structs.lamo` (struct-holding-arrays block) |
+| **Version 2.10.0** | `src/cli/cli_options.c` VERSION; roadmap (Release Highlights, Current Priorities); SPEC §3.7 (dictionary dispatch), §7.8 (forwarding), §10.7 (eval parity — no constructs left behind), §14 changelog v1.7; README; CLAUDE.md |
 
 ## Completed in 2.9.0
 

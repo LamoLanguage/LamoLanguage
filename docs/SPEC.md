@@ -539,13 +539,42 @@ impl Shape for Circle {
   and `Stack<string>` both satisfy `Printable`).
 - Traits may be marked `pub trait` in module files (§10.6 marker accepted;
   like structs/enums, trait NAMES are not module-registry members).
-- **Static dispatch only.** Calling a method on a value whose type is a
-  bare type parameter (`s.area()` where `s: T`) is a compile error:
-  generics are erased at the backend and there is no vtable/mono
-  machinery (RFC-generics §12.4). Trait constraints check CALL SITES;
-  they do not enable dynamic dispatch. Constraint propagation through
-  generic-to-generic calls is likewise not checked for traits OR for the
-  built-in catalogue (§7.7 limitation, mirrored exactly).
+- **Static dispatch through trait dictionaries (2.10.0).** Calling a
+  trait method on a value whose type is a bare type parameter
+  (`s.area()` inside `fn draw<T: Shape>(s: T)`) is now VALID when the
+  type parameter's fn-level constraint is a declared trait. Generics
+  still compile ONCE under erasure (no monomorphization, no vtables —
+  RFC-generics §12.4), but the method call resolves through a
+  DICTIONARY: a generated struct of function pointers, one field per
+  trait method, passed as a HIDDEN trailing parameter to the
+  constrained generic fn:
+
+  - Inside the fn body, `s.method(...)` compiles to
+    `_dict_T->method(s, ...)` — the dictionary's static type guarantees
+    the callee exists, so no runtime type tags are needed;
+  - every CALL SITE of the fn passes one hidden argument per
+    trait-constrained type parameter: the address of a static
+    dictionary instance generated from the `impl Trait for Struct`
+    registry (e.g. `&lamo_dict_Shape_Circle`), or — when the argument
+    is itself a constrained type parameter of the ENCLOSING fn — the
+    enclosing fn's own dictionary (forwarding, see §7.8);
+  - the call is checked against the TRAIT's signature (strict arity;
+    argument compatibility wherever both sides annotate; the trait's
+    return annotation flows into the call's type);
+  - a trait-constrained parameter whose type argument cannot be
+    inferred at a call site is a compile error — the dictionary must be
+    known statically;
+  - catalogue constraints (`Eq`, `Ord`, `Num`, `Hash`, `Show`) carry no
+    methods and never dispatch; method calls on receivers constrained
+    only by catalogue constraints (or unconstrained parameters) remain
+    compile errors with constraint-aware diagnostics;
+  - impl METHODS cannot declare trait-constrained type parameters (the
+    method-call ABI keeps the erased shape) — standalone generic fns
+    are the dispatch surface.
+
+  Constraint propagation through generic-to-generic calls is otherwise
+  still not checked for the built-in catalogue (§7.7 limitation,
+  mirrored exactly).
 
 ### 3.8 `import` declarations
 
@@ -1014,6 +1043,15 @@ block (generic impls satisfy every instantiation). Built-in types,
 arrays and enums never satisfy user traits — they satisfy only the
 catalogue above.
 
+**2.10.0: forwarding.** A type argument that is itself a type parameter
+of the enclosing fn satisfies a trait constraint when the enclosing
+parameter carries the SAME trait constraint — `draw(x)` inside
+`fn wrapper<T: Shape>(x: T)` is legal because `wrapper`'s own call
+sites enforce `T: Shape` transitively. The trait dictionary then
+forwards (§3.7): the inner call receives the outer fn's dictionary
+instead of building a new one. Forwarding applies only through
+standalone generic fns.
+
 Unknown constraint names (neither catalogue nor a declared trait) and
 violated constraints at call sites are compile errors. Constraints apply
 identically to struct and enum type parameter lists
@@ -1325,14 +1363,30 @@ loading, which had become the single biggest workflow gap between them:
   representation, and the interpreter keeps an enum registry so the
   REPL (which runs no semantic pass) resolves variants exactly like
   the compiler.
-- What eval/repl still do NOT support: the struct/array value model
-  (the last interpreter limitation). Programs using those still need
-  `lamo run`.
+- **2.10.0 (value-model completion):** the interpreter models ARRAYS
+  (`EVAL_VAL_ARRAY`) and STRUCTS (`EVAL_VAL_STRUCT`) natively — the
+  last `lamo eval`/`lamo run` divergence is closed. Both are
+  refcounted SHARED heap objects, mirroring the C backend's
+  pointer-based representation: assignment aliases, mutations through
+  one binding are visible through every alias, and equality compares
+  identity. Array literals/indexing (negative indexes included),
+  `push`/`pop`/`len` (member and global forms), struct literals with
+  field defaults, field access/assignment (including compound
+  `+=`/`-=`), methods — inherent AND trait impls — with `self`
+  aliasing semantics, truthiness (§6.3), and `print` rendering all
+  match the compiled backend byte-for-byte on the eval suite. Trait
+  dictionary dispatch (§3.7) rides the same impl registry: the
+  interpreter dispatches on the receiver's concrete struct name, which
+  erasure-hiding makes unnecessary on the backend side.
+- What eval/repl still do NOT support: nothing — the struct/array
+  value model shipped in 2.10.0, closing the last interpreter
+  limitation. Semantics are defined by `lamo run`; any residual
+  divergence is a bug.
 
 The old `"module member 'math.sqrt' is not available in eval/repl mode"
-error no longer exists. If a snippet uses constructs the interpreter
-does not model (structs, arrays), eval says so at the runtime-error site
-as before.
+error no longer exists, and since 2.10.0 there are no constructs left
+that only `run` models — the interpreter implements the full value
+model (structs and arrays included).
 
 **Decision (revised 2.6.0):** `eval`/`repl` and `run` are distinct paths
 with distinct purposes — fast feedback vs native performance — and now
@@ -1342,12 +1396,13 @@ removed by routing interpreter member calls through the same renamed
 declarations the loader produces; no registry was duplicated and no GCC
 step was added.
 
-**Migrating from `eval` to `run`:** if a snippet uses constructs the
-interpreter does not model (structs, arrays), save it to a `.lamo`
-file and run it with `lamo run file.lamo`. The language semantics are
-otherwise identical between the two paths — the interpreter implements
-the same value model (including enums and match since 2.8.0), truthiness
-rules, and runtime errors as the transpiler.
+**Migrating from `eval` to `run`:** the move is purely about
+performance and tooling (GCC optimization, `lamo build` distribution) —
+not semantics. Save the snippet to a `.lamo` file and run it with
+`lamo run file.lamo`. The language semantics are identical between the
+two paths — the interpreter implements the same value model (enums and
+match since 2.8.0; structs and arrays since 2.10.0, with trait impl
+dispatch), truthiness rules, and runtime errors as the transpiler.
 
 ---
 
@@ -1558,3 +1613,27 @@ this spec. When they ship, this spec will be updated.
   now carry their concrete full type into §7.7 binding and constraint
   enforcement (also closes the same gap for the built-in catalogue);
   §3.7/§3.8 renumbering (import moved to §3.8).
+- **v1.7** (compiler 2.10.0) — INTERPRETER VALUE-MODEL COMPLETION +
+  TRAIT DICTIONARY DISPATCH. (1) The interpreter models arrays and
+  structs natively (`EVAL_VAL_ARRAY`/`EVAL_VAL_STRUCT`, §10.7) — the
+  last `lamo eval`/`lamo run` divergence closed: refcounted shared heap
+  objects mirror the backend's pointer representation (assignment
+  aliases, identity equality), with array literals/indexing (negative
+  indexes), `push`/`pop`/`len`, struct literals/fields/methods
+  (inherent and trait impls) with `self` aliasing, truthiness, and
+  byte-for-byte `print` parity on the eval suite; also fixes struct
+  alias flow in SEMANTIC (`let q = p` now carries the struct identity
+  on both backends) and the chained array-len route (`self.items.len`,
+  `b.items.len` previously emitted the defensive `lamo_make_int(0)`).
+  (2) Method calls on type-parameter receivers inside trait-constrained
+  generic fns (`s.area()` in `fn draw<T: Shape>`) dispatch through
+  generated trait dictionaries — generated `LamoDict_<Trait>` structs
+  of function pointers passed as hidden trailing parameters, static
+  instances built from the impl registry per call site, generic→generic
+  forwarding of the enclosing fn's dictionary, and the trait's return
+  annotation flowing into the call's type (§3.7, §7.8). Catalogue
+  constraints and unconstrained parameters keep honest diagnostics;
+  a trait-constrained parameter that cannot be inferred at a call site
+  is a compile error (the dictionary must be known statically);
+  trait-constrained type parameters on impl METHODS are rejected (the
+  method-call ABI keeps the erased shape).

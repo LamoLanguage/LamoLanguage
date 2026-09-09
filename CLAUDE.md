@@ -204,10 +204,21 @@ formalized in `docs/ARCHITECTURE.md`.
   contract; `impl Name for Type { ... }` implements it (validated for
   coherence, completeness, and signature compatibility — see SPEC §3.7).
   Trait names are first-class constraints (`T: Name`) enforced at call
-  sites against the impl registry (SPEC §7.8). Static dispatch only:
-  method calls on bare type-parameter receivers are compile errors
-  (generics are erased; no vtables). Trait-impl methods emit as ordinary
-  `lamo_method_<Type>__<name>` via the existing impl machinery.
+  sites against the impl registry (SPEC §7.8). Trait-impl methods emit as
+  ordinary `lamo_method_<Type>__<name>` via the existing impl machinery.
+- Trait dictionary dispatch (2.10.0): method calls on bare
+  type-parameter receivers (`s.area()` inside `fn draw<T: Shape>`)
+  dispatch through generated `LamoDict_<Trait>` structs of function
+  pointers passed as hidden trailing parameters — static instances built
+  from the impl registry per call site, generic→generic forwarding, no
+  vtables (SPEC §3.7). Catalogue constraints and unconstrained parameters
+  carry no methods (honest diagnostics); impl methods cannot declare
+  trait-constrained type parameters.
+- Interpreter value model (2.10.0): arrays and structs run under
+  `lamo eval`/`lamo repl` (`EVAL_VAL_ARRAY`/`EVAL_VAL_STRUCT`) with
+  backend-parity aliasing (refcounted shared objects), methods, trait
+  dispatch, and print rendering — the eval suite asserts byte-for-byte
+  run/eval agreement (SPEC §10.7).
 - GUI builtins (Windows-native, X11 on Linux/Mac, no-op elsewhere):
   `gui_open`, `gui_should_close`, `gui_begin_frame`, `gui_draw_rect`,
   `gui_draw_text`, `gui_end_frame`, `gui_close`
