@@ -1,0 +1,5 @@
+// 2.8.0 (FU5): the payload of V binds T=int; the annotation says
+// E<string, string> — invariance rejects the mismatch.
+enum E<T, U> { V(T) }
+let e: E<string, string> = V(42)
+print(e)

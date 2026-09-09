@@ -1,0 +1,1 @@
+enum 'E' type parameter 'T' is bound to 'int' by the constructor payload, but annotation 'E<string,int>' says 'string'

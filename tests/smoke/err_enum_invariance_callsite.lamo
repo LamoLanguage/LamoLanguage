@@ -1,0 +1,5 @@
+// 2.8.0 (FU5): same invariance enforcement at a call site — the
+// parameter's annotation participates in binding the ctor's type args.
+enum E<T, U> { V(T) }
+fn f(p: E<string, int>) { print(p) }
+f(V(42))

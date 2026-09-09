@@ -1137,7 +1137,11 @@ static const char* arg_concrete_full_type(SemanticContext* ctx, ASTNode* node) {
                     case LAMO_TYPE_FLOAT:  return lamo_intern_type("float");
                     case LAMO_TYPE_STRING: return lamo_intern_type("string");
                     case LAMO_TYPE_BOOL:   return lamo_intern_type("bool");
-                    default: return NULL;
+                    default:
+                        /* 2.8.0 (FU5): enum-typed symbols carry their
+                         * concrete full type on the NODE (bare unit
+                         * variants stamp the degraded bare enum name). */
+                        return node->sema_full_type;
                 }
             }
             return NULL;
@@ -1199,7 +1203,22 @@ static int call_types_compatible(const char* expected_full, LamoType expected_ba
     int numeric_pair = (expected_base == LAMO_TYPE_INT || expected_base == LAMO_TYPE_FLOAT) &&
                        (actual_base == LAMO_TYPE_INT || actual_base == LAMO_TYPE_FLOAT);
     if (numeric_pair) return 1;
-    if (expected_full && actual_full) return ann_equal(expected_full, actual_full);
+    if (expected_full && actual_full) {
+        if (ann_equal(expected_full, actual_full)) return 1;
+        /* 2.8.0 (FU5): a DEGRADED enum full type (bare "E" — only
+         * produced by partially-inferable ctor inference or bare
+         * unit-variant values, never by a validated annotation, which
+         * always carries its type args) defers against its own enum's
+         * annotated form "E<...>". "Annotated enum params bind like
+         * generic signatures": unknown type args cannot violate
+         * invariance, so the check defers instead of failing. */
+        if (strchr(actual_full, '<') == NULL && strchr(expected_full, '<') != NULL) {
+            char ah[64];
+            ann_head(expected_full, ah, sizeof(ah));
+            if (strcmp(ah, actual_full) == 0) return 1;
+        }
+        return 0;
+    }
     /* No strings to compare — bases decide when non-degenerate. */
     if (!actual_full && !expected_full) return expected_base == actual_base ||
                                                     expected_base == LAMO_TYPE_STRUCT ||
@@ -1336,6 +1355,125 @@ static int ann_bind_pattern(const char* pattern, const char* concrete, AnnSubstM
     /* Full consumption required on both sides. */
     if (r && (*pp || *cp)) return 0;
     return r;
+}
+
+/* ── 2.8.0 (FU5): enum annotation type-arg invariance at call sites ─────
+ * A constructor call whose enum is only PARTIALLY inferable from its
+ * payloads (`enum E<T, U> { V(T) }`) degrades to the BARE enum name as
+ * its sema_full_type (the 2.7.0 FU1 behavior). Against an expected
+ * annotation `E<int, string>` that bare name loses information: the
+ * let-annotation check compares heads only (type args unchecked), and
+ * call-site binding fails the angle-list agreement test.
+ *
+ * This helper completes the degraded type AGAINST the expected enum
+ * annotation: type params are re-bound from the ctor payloads (the
+ * §7.7 machinery), the remaining params are filled from the
+ * annotation's own type arguments, and invariance is enforced — a
+ * param bound by a payload must EQUAL the annotation's argument
+ * (Rust-style: `E<string, ...> = V(42)` is an error because the
+ * payload binds T=int).
+ *
+ * Returns the completed interned full type (and stamps it on the ctor
+ * call node so downstream arg_concrete_full_type sees the concrete
+ * type), or NULL when completion does not apply / is impossible.
+ * Mismatch errors are reported here. */
+static const char* enum_complete_degraded_full_type(SemanticContext* ctx,
+                                                    ASTNode* init,
+                                                    const char* annotation,
+                                                    int line, int column) {
+    if (!init || !annotation) return NULL;
+    /* Applies only to DEGRADED ctor calls: stamped by the ctor branch,
+     * full type present but without type args. */
+    if (!init->sema_enum_name || init->sema_variant_index < 0) return NULL;
+    if (!init->sema_full_type || strchr(init->sema_full_type, '<') != NULL) return NULL;
+
+    /* The annotation must head the same enum and carry a type-arg list. */
+    char ahead[64];
+    ann_head(annotation, ahead, sizeof(ahead));
+    if (strcmp(ahead, init->sema_enum_name) != 0) return NULL;
+    const char** ann_args = NULL;
+    char ann_head_buf[64];
+    int ann_argc = ann_split_top_args(semantic_normalize_type(annotation),
+                                      ann_head_buf, sizeof(ann_head_buf), &ann_args);
+    if (ann_argc <= 0) return NULL;  /* no args / malformed: nothing to fill */
+
+    ASTEnumDecl* ed = find_enum_def(ctx, init->sema_enum_name);
+    if (!ed || ed->type_param_count == 0 || ed->type_param_count != ann_argc) {
+        free(ann_args);
+        return NULL;
+    }
+    int vidx = init->sema_variant_index;
+    int pcount = enum_variant_payload_count(ed, vidx);
+    if (pcount <= 0 || !ed->variant_payloads || !ed->variant_payloads[vidx]) {
+        free(ann_args);
+        return NULL;
+    }
+
+    /* Re-bind the enum's type params from the ctor payloads — the same
+     * loop the ctor branch runs (semantic_visit_call_full FU1 block). */
+    ASTCallExpr* ctor = (ASTCallExpr*)init;
+    AnnSubstMap emap;
+    emap.count = ed->type_param_count;
+    emap.names = (const char**)ed->type_params;
+    emap.values = calloc((size_t)ed->type_param_count, sizeof(char*));
+    if (!emap.values) {
+        free(ann_args);
+        return NULL;
+    }
+    for (int i = 0; i < pcount; i++) {
+        const char* ann = ed->variant_payloads[vidx][i];
+        const char* arg_full = (i < ctor->arg_count)
+            ? arg_concrete_full_type(ctx, ctor->args[i]) : NULL;
+        if (!ann || !arg_full) continue;
+        ann_bind_pattern(ann, arg_full, &emap);
+    }
+
+    /* Fill the unbound params from the annotation and enforce
+     * invariance against the payload-bound ones. */
+    int complete = 1;
+    for (int t = 0; t < ed->type_param_count && complete; t++) {
+        const char* ann_arg = ann_args[t];  /* interned */
+        if (emap.values[t]) {
+            if (ann_arg && !ann_equal(emap.values[t], ann_arg)) {
+                char message[400];
+                snprintf(message, sizeof(message),
+                         "enum '%s' type parameter '%s' is bound to '%s' by the constructor payload, "
+                         "but annotation '%s' says '%s'",
+                         ed->name, ed->type_params[t], emap.values[t],
+                         annotation, ann_arg);
+                semantic_error_at(ctx, line, column, message);
+                complete = 0;
+            }
+        } else if (ann_arg) {
+            emap.values[t] = ann_arg;
+        } else {
+            /* Param in neither payloads nor annotation: cannot complete
+             * (annotation was validated for arg count, so defensive). */
+            complete = 0;
+        }
+    }
+
+    const char* result = NULL;
+    if (complete) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "%s", ed->name);
+        size_t blen = strlen(buf);
+        for (int t = 0; t < ed->type_param_count && blen < sizeof(buf); t++) {
+            int n = snprintf(buf + blen, sizeof(buf) - blen, "%s%s",
+                             t == 0 ? "<" : ",", emap.values[t]);
+            if (n < 0 || (size_t)n >= sizeof(buf) - blen) { blen = sizeof(buf); break; }
+            blen += (size_t)n;
+        }
+        if (blen < sizeof(buf) - 1) {
+            buf[blen++] = '>';
+            buf[blen] = '\0';
+            result = lamo_intern_type(buf);
+            init->sema_full_type = result;  /* upgrade the degraded stamp */
+        }
+    }
+    free((void*)emap.values);
+    free(ann_args);
+    return result;
 }
 
 // Visit a call site: validates arity, parameter/argument types (SPEC
@@ -1535,6 +1673,18 @@ static LamoType semantic_visit_call_full(SemanticContext* ctx, const char* name,
             for (int i = 0; i < arg_count; i++) {
                 const char* expected = symbol->param_full[i];
                 if (!expected) continue;
+                /* 2.8.0 (FU5): a DEGRADED ctor arg (bare enum name from
+                 * a partially-inferable enum like `enum E<T, U> { V(T) }`)
+                 * completes against the parameter's enum annotation —
+                 * unbound params fill from the annotation, payload-bound
+                 * params enforce invariance — so §7.7 binding and the
+                 * compat check see the full concrete type. */
+                if (arg_full[i] && strchr(arg_full[i], '<') == NULL &&
+                    args[i] && args[i]->sema_enum_name) {
+                    const char* completed = enum_complete_degraded_full_type(
+                        ctx, args[i], expected, line, column);
+                    if (completed) arg_full[i] = completed;
+                }
                 LamoType expected_base = annotation_to_type_with_ctx(ctx, expected);
 
                 /* Type-parameter leaves: "T" or "array<T>" etc. */
@@ -2176,6 +2326,19 @@ static void semantic_visit_statement(SemanticContext* ctx, ASTNode* node) {
                                      var_decl->type_annotation, init_enum_name);
                             semantic_error_at(ctx, node->line, node->column, message);
                         }
+                    }
+                    /* 2.8.0 (FU5): a degraded ctor initializer completes
+                     * against the annotation — unbound type params fill
+                     * from the annotation's arguments and invariance is
+                     * enforced (payload-bound params must equal the
+                     * annotation's). `let e: E<int, string> = V(42);`
+                     * yields a fully concrete E<int, string> instead of
+                     * leaving the type args unchecked. */
+                    if (var_decl->initializer &&
+                        var_decl->initializer->sema_enum_name) {
+                        enum_complete_degraded_full_type(
+                            ctx, var_decl->initializer, var_decl->type_annotation,
+                            node->line, node->column);
                     }
                     if (init_type != LAMO_TYPE_UNKNOWN && init_type != LAMO_TYPE_ENUM) {
                         char message[256];
@@ -3235,6 +3398,14 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
                         semantic_error_at_hint(ctx, node->line, node->column, message, hint);
                         return LAMO_TYPE_UNKNOWN;
                     }
+                    /* 2.8.0 (FU5): a bare unit-variant value degrades to
+                     * the BARE enum name as its concrete full type (e.g.
+                     * `None` → "Option") — the same degraded shape the
+                     * ctor branch produces for partially-inferable
+                     * enums. Call sites expecting `Option<int>` accept
+                     * it via the degraded-enum deferral in
+                     * call_types_compatible. */
+                    node->sema_full_type = lamo_intern_type(venum);
                 }
             }
             return symbol->type;
@@ -3273,6 +3444,9 @@ static LamoType semantic_infer_expression(SemanticContext* ctx, ASTNode* node) {
             }
             node->sema_enum_name = ved->name;
             node->sema_variant_index = vidx;
+            /* 2.8.0 (FU5): degraded bare-enum full type, matching the
+             * bare unit-variant identifier path (call-site deferral). */
+            node->sema_full_type = lamo_intern_type(ved->name);
             return enum_decl_is_tagged(ved) ? LAMO_TYPE_ENUM : LAMO_TYPE_INT;
         }
         case AST_BINARY_EXPR: {

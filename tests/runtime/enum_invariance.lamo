@@ -1,0 +1,35 @@
+// 2.8.0 (FU5): enum annotation type-arg invariance at call sites.
+// Partially-inferable multi-param enums (`enum E<T, U> { V(T) }`) no
+// longer degrade into unchecked bare names: annotated lets complete
+// the full type from the annotation, call sites bind ctor args
+// against annotated params, and mismatches are compile errors (smoke
+// err_enum_invariance_{let,callsite}).
+enum E<T, U> { V(T), W(U) }
+enum Option<T> { Some(T), None }
+
+// the annotation fills the param the payload cannot infer
+let e: E<int, string> = V(42)
+print(e)
+let e2: E<int, string> = W("hi")
+print(e2)
+
+// annotated params accept ctor values via §7.7 binding
+fn take_e(p: E<int, string>) {
+    print(p)
+}
+take_e(V(7))
+take_e(W("x"))
+
+// bare unit variants degrade to the bare enum name and are accepted
+// against annotated params (spurious "got 'enum'" error in 2.7.0)
+fn is_none(o: Option<int>) -> bool {
+    return match o { None => true, Some(_) => false }
+}
+print(is_none(None))
+print(is_none(Some(1)))
+
+// generic fns bind through completed ctor args
+fn show<T>(x: T) -> T {
+    return x
+}
+print(show(V(9)))
