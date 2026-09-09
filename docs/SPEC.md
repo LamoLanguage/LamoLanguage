@@ -130,18 +130,24 @@ top_decl      := import_decl
               | struct_decl
               | enum_decl
               | impl_decl
+              | trait_decl
               | fn_decl
               | let_decl
 
 import_decl   := 'import' ( string_lit [ 'as' IDENT ] | IDENT [ 'as' IDENT ] ) ';'?
 struct_decl   := 'struct' IDENT type_params? '{' field_list '}'
 type_params   := '<' tp (',' tp)* '>'                      // PR6: optional constraint per parameter
-tp            := IDENT [':' IDENT]                          // e.g. T, K: Ord, V: Hash
+tp            := IDENT [':' IDENT]                          // e.g. T, K: Ord, V: Hash — 2.9.0: also a declared trait
 field_list    := field ( (',' | ';' | NEWLINE) field )*
 field         := IDENT ':' type_ann
 enum_decl     := 'enum' IDENT '{' variant_list '}'
 variant_list  := IDENT ( (',' | NEWLINE) IDENT )*
-impl_decl     := 'impl' type_params? IDENT type_args? '{' fn_decl* '}'   // RFC §4.4: impl<T> Stack<T>
+impl_decl     := 'impl' type_params? ( IDENT ['for' IDENT type_args?]
+                                     | IDENT type_args? ) '{' fn_decl* '}'
+                // 2.9.0: `impl Shape for Circle { ... }` (trait impl) OR
+                // the inherent form `impl Circle { ... }` / `impl<T> Stack<T> { ... }`
+trait_decl    := 'trait' IDENT '{' trait_sig* '}'           // 2.9.0 (§3.7)
+trait_sig     := 'fn' IDENT '(' param_list? ')' ('->' type_ann)? ';'?
 fn_decl       := 'fn' IDENT type_params? '(' param_list? ')' ('->' type_ann)? block
 param_list    := param (',' param)*
 param         := IDENT (':' type_ann)?
@@ -480,7 +486,68 @@ impl Player {
   semantic pass runs in two phases (collect struct/enum/impl definitions,
   then visit function bodies).
 
-### 3.7 `import` declarations
+### 3.7 `trait` declarations (2.9.0)
+
+```
+trait Shape {
+    fn area() -> float;
+    fn name() -> string;
+}
+
+impl Shape for Circle {
+    fn area() -> float { return 3.14159 * self.r * self.r }
+    fn name() -> string { return "circle" }
+}
+```
+
+- `trait Name { ... }` declares a NAMED SET OF REQUIRED METHOD SIGNATURES —
+  a compile-time contract. Traits generate no code and add nothing to the
+  runtime; they exist so the compiler can check two things:
+  1. **impl completeness** — every `impl Name for Type` block implements
+     the whole contract (see below);
+  2. **first-class generic constraints** — `T: Name` is valid wherever the
+     built-in catalogue constraints (§7.8) are, checking call sites
+     statically ("first-class constraints beyond the catalogue").
+- Trait bodies contain ONLY method signatures: `fn name(params) [-> Type];`.
+  A body (`{ ... }`) inside a trait is a syntax error, with a diagnostic
+  pointing at `impl Trait for Type`. Parameter and return annotations use
+  the same grammar as functions (§3.3) but may NOT reference type
+  parameters — traits are non-generic contracts in 2.9.0 (genericity lives
+  on the impl/struct side). Duplicate method names within a trait are
+  compile errors.
+- `impl Trait for Type { ... }` attaches methods to a declared struct AND
+  asserts the trait contract. Validation (all compile errors):
+  - the trait and the struct must be declared (order-independent — traits
+    hoist like structs, so the impl may appear before the trait);
+  - a struct may implement a given trait at most once ("coherence");
+    duplicate `impl Trait for Type` pairs are errors;
+  - every trait method must be present among the struct's methods, with
+    the SAME ARITY (strict) and matching annotations wherever BOTH the
+    trait and the impl annotate a parameter or the return type (missing
+    annotations never conflict — Lamo keeps annotations optional);
+  - extra methods beyond the trait's requirements are allowed and behave
+    as ordinary inherent methods.
+- Trait-impl methods are ordinary methods at runtime: they emit as
+  `lamo_method_<Type>__<name>` and resolve through the same machinery as
+  inherent methods (§3.6). `self` works identically. A struct's method is
+  callable whether or not the caller mentions the trait — the trait is a
+  checked contract, not a namespace.
+- Generic trait impls are supported with the RFC §4.4 echo form:
+  `impl<T> Printable for Stack<T> { ... }`. The echo must name the impl's
+  own parameters exactly (same validation as generic inherent impls). A
+  generic impl satisfies the trait for EVERY instantiation (`Stack<int>`
+  and `Stack<string>` both satisfy `Printable`).
+- Traits may be marked `pub trait` in module files (§10.6 marker accepted;
+  like structs/enums, trait NAMES are not module-registry members).
+- **Static dispatch only.** Calling a method on a value whose type is a
+  bare type parameter (`s.area()` where `s: T`) is a compile error:
+  generics are erased at the backend and there is no vtable/mono
+  machinery (RFC-generics §12.4). Trait constraints check CALL SITES;
+  they do not enable dynamic dispatch. Constraint propagation through
+  generic-to-generic calls is likewise not checked for traits OR for the
+  built-in catalogue (§7.7 limitation, mirrored exactly).
+
+### 3.8 `import` declarations
 
 See §10.
 
@@ -926,10 +993,10 @@ fn map2<A, B>(xs: array<A>, b: B) -> int { return xs.len(); }
 - Runtime representation is UNCHANGED for any instantiation — generics are
   erased; `array<int>` and `array<string>` lower to the same code.
 
-### 7.8 Constraint catalogue (Generics PR 6)
+### 7.8 Constraint catalogue (Generics PR 6) + user traits (2.9.0)
 
 A constraint restricts which concrete types may stand in for a type
-parameter (`fn sum<T: Num>(...)`). The catalogue is fixed:
+parameter (`fn sum<T: Num>(...)`). The built-in catalogue is fixed:
 
 | Constraint | Satisfied by |
 |------------|--------------|
@@ -940,11 +1007,16 @@ parameter (`fn sum<T: Num>(...)`). The catalogue is fixed:
 | `Num`      | int, float |
 | `Show`     | builtins + user structs |
 
-User structs satisfy `Any` only in this first rollout (RFC §6 documents why:
-operations dispatch dynamically today). Unknown constraint names and violated
-constraints at call sites are compile errors.
+**2.9.0: any declared trait (§3.7) is also a valid constraint name** —
+`fn draw<T: Shape>(s: T)`. A concrete type argument satisfies a trait
+constraint when it is a declared struct with an `impl Trait for Type`
+block (generic impls satisfy every instantiation). Built-in types,
+arrays and enums never satisfy user traits — they satisfy only the
+catalogue above.
 
-Constraints apply identically to struct type parameter lists
+Unknown constraint names (neither catalogue nor a declared trait) and
+violated constraints at call sites are compile errors. Constraints apply
+identically to struct and enum type parameter lists
 (`struct SortedMap<K: Ord, V>`).
 
 ### 7.9 Typed arrays and deprecation of bare `array` (PR 3)
@@ -1471,3 +1543,18 @@ this spec. When they ship, this spec will be updated.
   guarded untagged `match` arms, feature-detection blindness for
   expressions inside `match`/struct literals, and the spurious
   "expected 'Option<int>', got 'enum'" rejection of bare unit variants.
+- **v1.6** (compiler 2.9.0) — TRAITS (§3.7): `trait Name { fn sig; ... }`
+  declarations, `impl Trait for Type { ... }` blocks validated for
+  coherence (one impl per trait/struct pair), completeness (every required
+  method present) and signature compatibility (strict arity; annotations
+  compared wherever both sides annotate); generic trait impls via the
+  RFC §4.4 echo form (`impl<T> Printable for Stack<T>`) satisfying every
+  instantiation; trait names accepted as first-class generic constraints
+  on function/struct/enum type parameters (§7.8 — "constraints beyond the
+  catalogue"), enforced at call sites against the impl registry;
+  `pub trait` module marker accepted; honest compile-time diagnostics for
+  method calls on bare type-parameter receivers (previously a silent
+  `lamo_make_int(0)` fallback in the C backend); struct-literal arguments
+  now carry their concrete full type into §7.7 binding and constraint
+  enforcement (also closes the same gap for the built-in catalogue);
+  §3.7/§3.8 renumbering (import moved to §3.8).

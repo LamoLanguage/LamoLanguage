@@ -29,6 +29,7 @@ Instead of executing code through a virtual machine, **Lamo transpiles your prog
 - ⚡ **Transpiles to C** — native executables, no VM
 - 🧠 **Clean, readable syntax** — optional semicolons, Python-like truthiness
 - 🧬 **Generics** — generic functions, structs, `impl<T>`, and constraints (`T: Ord`)
+- 🔷 **Traits** — `trait Shape { ... }` + `impl Shape for Circle { ... }`; trait names are first-class constraints (`T: Shape`)
 - 🏷 **Tagged-union enums** — `Option<T> { Some(T), None }` with `Some(x) =>` match bindings
 - 🏗 **Structs & methods** — `struct` / `impl` blocks with implicit `self`
 - 📚 **Enums & `match`** — variant patterns with exhaustiveness warnings
@@ -78,6 +79,36 @@ let hero = Player { name: "Arthur", hp: 100 }
 hero.damage(25)
 print(hero.hp)   // 75
 ```
+
+### Traits (new in 2.9)
+
+```lamo
+trait Shape {
+    fn area() -> float
+    fn name() -> string
+}
+
+struct Circle { r: float }
+
+impl Shape for Circle {
+    fn area() -> float { return 3.14159 * self.r * self.r }
+    fn name() -> string { return "circle" }
+}
+
+// Traits are first-class constraints — the compiler checks every call
+// site: `describe(square)` fails to compile until Square implements Shape.
+fn describe<T: Shape>(s: T) -> float {
+    return 1.0
+}
+
+let c = Circle { r: 2.0 }
+print(c.area())     // methods resolve as usual on concrete values
+print(describe(c))  // OK — Circle implements Shape
+```
+
+Static dispatch only: generics are erased by the C backend, so calling a
+method on a bare `T` inside a generic body is a compile error (traits check
+call sites; they do not add vtables). See `docs/SPEC.md` §3.7.
 
 ### Generics (new in 2.5)
 
@@ -164,13 +195,16 @@ Runnable programs live in [`examples/`](examples/) and [`std/examples/`](std/exa
 
 ## Project Status
 
-The current implementation (v2.7.0) includes:
+The current implementation (v2.9.0) includes:
 
 - ✅ Lexer, parser, AST
 - ✅ Semantic analyzer (scopes, types, generics binding, constraints)
 - ✅ C backend with embedded runtime
 - ✅ Structs, methods, arrays, enums, match
 - ✅ Generics (PRs 1–6): generic functions/structs/impls, `array<T>`, constraints
+- ✅ Traits — `trait` declarations, `impl Trait for Type` with coherence,
+  completeness and signature validation, and trait names as first-class
+  generic constraints (`T: Shape`) checked at call sites
 - ✅ Tagged-union enums — payload variants, `Some(x) =>` match bindings,
   nested destructuring (`Some(Pair(a, b))`), `when` guards,
   `Enum::Variant` qualification, and enum type annotations
@@ -201,7 +235,7 @@ Next up (see [`roadmap.md`](roadmap.md) and [`todo.md`](todo.md) for the full pi
 - [x] 2.7.0 follow-ups: eval/REPL enum support, match literal patterns,
       match as an expression, enum annotation type-arg invariance,
       full `run_tests.ps1` parity (smoke/golden/std + `.stdin`)
-- [ ] Traits
+- [x] Traits
 - [ ] Better formatter (AST-based pretty-printer)
 - [ ] Language Server (LSP)
 - [ ] VSCode extension

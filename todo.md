@@ -29,12 +29,23 @@ the roadmap's Current Priorities.
 | Open Follow-Ups (2.5.0 ledger) | ✅ Complete (2.6.0) |
 | Open Follow-Ups (2.6.0 ledger) | ✅ Complete (2.7.0) |
 | Open Follow-Ups (2.7.0 ledger) | ✅ Complete (2.8.0) |
+| Roadmap priority #1 — Traits | ✅ Complete (2.9.0) |
 
 ## Open Follow-Ups
 
 Nothing outstanding — the 2.7.0 ledger closed in 2.8.0 (see below). New
 discovered work starts in `roadmap.md` Current Priorities and moves here
 when a sprint commits to it.
+
+## Completed in 2.9.0
+
+| Item | Evidence |
+|------|----------|
+| **Traits — declarations & impl validation** — `trait Name { fn sig; ... }` + `impl Trait for Type { ... }` | SPEC §3.7; lexer `TOKEN_TRAIT`; `AST_TRAIT_DECL` + `ASTImplDecl.trait_name` (ast.h/ast.c); parser `parse_trait_signature` (bodies inside traits are a syntax error with a targeted diagnostic) and the `for` form in impl parsing; semantic trait registry (`find_trait_def`, order-independent like structs) + validation in the `AST_IMPL_DECL` case: coherence (duplicate impl pair is an error), completeness (missing required methods listed one-by-one with an "add `fn ...`" hint), signature compatibility (strict arity; normalized annotation comparison wherever BOTH sides annotate); trait-impl methods stamp `sema_struct_name` and emit as ordinary `lamo_method_<Type>__<name>` through the existing impl machinery (forward decls, bodies, method dispatch — no backend changes beyond skipping the contract node); generic trait impls `impl<T> C for S<T>` validate the echo and satisfy the trait for every instantiation; `pub trait` accepted (§10.6 marker); REPL sniffer accepts `trait ` lines; `lamo fmt`/`check` handle trait files. Tests `tests/runtime/traits.lamo`, `tests/valid/traits.lamo`, smoke `err_trait_{missing_method,bad_arity,unknown,duplicate_impl,constraint_violation,sig_mismatch,body_in_trait,on_builtin}.*` |
+| **Traits as first-class constraints** — beyond the PR 6 catalogue | SPEC §7.8; constraint-name validation at fn/struct/enum declaration sites accepts declared traits (`find_trait_def`) while unknown names still error with an updated message; call-site enforcement (§7.7 machinery) routes non-catalogue constraints to `lamo_type_satisfies_trait` — head must be a declared struct with an `impl Trait for Type` (builtins/arrays/enums never satisfy user traits, with a tailored hint); works for multiple trait constraints per fn and mixes with catalogue constraints |
+| **Honest diagnostics for type-parameter method calls** — silent `lamo_make_int(0)` fallback removed | semantic member-call resolution now rejects `s.method()` when the receiver's full type is a bare type parameter of the enclosing fn/impl (params carry their normalized annotation on the symbol); previously the C backend fell into a defensive `lamo_make_int(0)` and the program printed wrong values; the error explains the erasure/static-dispatch rationale (RFC-generics §12.4) |
+| **Struct-literal arguments bind §7.7 type parameters** — catalogue + traits both benefit | `arg_concrete_full_type` gained an `AST_STRUCT_LITERAL` case returning the bare struct name or the explicit instantiation (`Stack<int>`); `g(Plain { x: 5 })` with `T: Num` now fails the constraint check instead of silently skipping the call site (pre-existing gap, verified against the catalogue before fixing) |
+| **Version 2.9.0** | `src/cli/cli_options.c` VERSION; README (feature list, taste section, status, roadmap checkbox); roadmap (Release Highlights, Current Priorities with the dictionary-dispatch follow-up); SPEC §1 grammar, §3.7 (new), §3.8 renumber, §7.8, §14 changelog v1.6 |
 
 ## Completed in 2.8.0
 

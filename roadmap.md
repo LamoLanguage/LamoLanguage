@@ -29,6 +29,20 @@ track *what it means*.
 
 ## Release Highlights
 
+**2.9.0** — TRAITS shipped, the roadmap's top priority: `trait Name {
+fn sig; ... }` declarations and `impl Trait for Type { ... }` blocks
+validated for coherence (one impl per trait/struct pair), completeness
+(every required method present) and signature compatibility (strict
+arity; annotations compared wherever both sides annotate). Trait names
+are first-class generic constraints — `fn draw<T: Shape>(s: T)` —
+enforced at call sites against the impl registry for functions, structs
+and enums (SPEC §3.7/§7.8). Generic trait impls (`impl<T> Printable for
+Stack<T>`) satisfy every instantiation. En route: honest compile-time
+errors for method calls on bare type-parameter receivers (previously a
+silent `lamo_make_int(0)` in the C backend) and struct-literal arguments
+now carry their concrete full type into §7.7 binding and constraint
+enforcement (closing the same gap for the built-in catalogue).
+
 **2.8.0** — the 2.7.0 Open Follow-Ups ledger closed: eval/REPL enum support
 (`EVAL_VAL_ENUM` + an interpreter enum registry — enum declarations,
 constructor calls, and `match` now run under `lamo eval`/`lamo repl` with
@@ -94,13 +108,19 @@ Per-item detail lives in [`todo.md`](todo.md).
 
 ## Current Priorities
 
-The next meaningful work, in suggested order (the 2.7.0 follow-up ledger is
-closed in 2.8.0 — see [todo.md](todo.md) "Completed in 2.8.0"):
+The next meaningful work, in suggested order (traits shipped in 2.9.0 —
+see the Release Highlights above):
 
-1. **Traits** — first-class constraints beyond the catalogue.
-2. **Interpreter value-model completion** — arrays and structs in
+1. **Interpreter value-model completion** — arrays and structs in
    `EVAL_VAL_*` (the last `lamo eval`/`lamo run` divergence; match and
-   enums reached parity in 2.8.0).
+   enums reached parity in 2.8.0). Trait-impl method calls will ride the
+   same struct support.
+2. **Trait dictionary dispatch (static per call site)** — pass
+   trait-method dictionaries as hidden parameters to constrained generic
+   functions so `s.area()` inside `fn draw<T: Shape>` compiles to a
+   resolved call. Requires a small ABI extension for constrained generic
+   functions; no runtime type tags needed. This is the natural follow-up
+   to 2.9.0's checked contracts.
 3. **Better formatter** (AST-based pretty-printer), **LSP**, **VSCode
    extension**, **documentation website**.
 4. **Windows CI contributor** — `run_tests.ps1` is now section-complete;

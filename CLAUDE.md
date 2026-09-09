@@ -200,6 +200,14 @@ formalized in `docs/ARCHITECTURE.md`.
   `fn id<T>(x: T) -> T` with call-site inference, `impl<T> Stack<T>`, typed
   arrays `array<T>` (bare `array` is a deprecated alias for `array<any>`),
   and the constraint catalogue `Any | Eq | Ord | Num | Hash | Show`.
+- Traits (2.9.0): `trait Name { fn sig; ... }` declares a compile-time
+  contract; `impl Name for Type { ... }` implements it (validated for
+  coherence, completeness, and signature compatibility — see SPEC §3.7).
+  Trait names are first-class constraints (`T: Name`) enforced at call
+  sites against the impl registry (SPEC §7.8). Static dispatch only:
+  method calls on bare type-parameter receivers are compile errors
+  (generics are erased; no vtables). Trait-impl methods emit as ordinary
+  `lamo_method_<Type>__<name>` via the existing impl machinery.
 - GUI builtins (Windows-native, X11 on Linux/Mac, no-op elsewhere):
   `gui_open`, `gui_should_close`, `gui_begin_frame`, `gui_draw_rect`,
   `gui_draw_text`, `gui_end_frame`, `gui_close`
