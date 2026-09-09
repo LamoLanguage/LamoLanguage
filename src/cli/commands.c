@@ -274,7 +274,15 @@ int command_repl(int argc, char** argv) {
             strncmp(p, "for ", 4) == 0 || strncmp(p, "for(", 4) == 0 ||
             strncmp(p, "return", 6) == 0 ||
             strcmp(p, "break") == 0 || strcmp(p, "continue") == 0 ||
-            strncmp(p, "import ", 7) == 0) {
+            strncmp(p, "import ", 7) == 0 ||
+            /* 2.8.0 (FU1): declarations and match parse as statements so
+             * `enum Color { Red, Green }` and single-line `match x { ... }`
+             * work at the prompt (multi-line bodies still need a file or
+             * `lamo run`, like fn/if/while). */
+            strncmp(p, "enum ", 5) == 0 || strncmp(p, "enum{", 5) == 0 ||
+            strncmp(p, "match ", 6) == 0 || strncmp(p, "match(", 6) == 0 ||
+            strncmp(p, "struct ", 7) == 0 ||
+            strncmp(p, "impl ", 5) == 0) {
             is_stmt = 1;
         }
 

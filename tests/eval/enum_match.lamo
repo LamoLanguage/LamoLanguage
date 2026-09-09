@@ -1,0 +1,39 @@
+// 2.8.0 (FU1): the interpreter evaluates enum declarations, constructor
+// calls, and match (SPEC §10.7 parity with `lamo run` — the 2.7.0
+// Open Follow-Ups ledger). Output must match enum_match.expected.
+enum Option<T> {
+    Some(T),
+    None
+}
+
+enum Color { Red, Green, Blue }
+
+fn describe(v: int) {
+    print(v)
+}
+
+let o = Some(42)
+match o {
+    Some(v) => describe(v),
+    None => print("none")
+}
+
+match None {
+    Some(v) => describe(v),
+    None => print("it is none")
+}
+
+let c = Color::Green
+match c {
+    Color::Red => print("red"),
+    Color::Green => print("green"),
+    Color::Blue => print("blue")
+}
+
+print(Some(1) == Some(1))
+print(Some(1) == Some(2))
+print(None == None)
+print(Some(1) == None)
+if (Some(5)) { print("truthy") }
+print(Some(Some("x")))
+print(Some(1) != Some(2))

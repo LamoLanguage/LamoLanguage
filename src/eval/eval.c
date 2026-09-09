@@ -27,10 +27,52 @@ EvalValue eval_string_take(char* s) {
     return v;
 }
 
+/* 2.8.0 (FU1): tagged-union enum value. Takes ownership of the payload
+ * array (the caller stops using it) and strdup's the variant name so
+ * callers may pass ring-buffer / literal strings. */
+EvalValue eval_enum(long long tag, const char* variant_name,
+                    EvalValue* payloads, int payload_count) {
+    EvalValue v;
+    v.type = EVAL_VAL_ENUM;
+    v.as.e.tag = tag;
+    v.as.e.variant_name = strdup(variant_name ? variant_name : "enum");
+    v.as.e.payloads = payloads;
+    v.as.e.payload_count = payloads ? payload_count : 0;
+    return v;
+}
+
 void eval_value_free(EvalValue v) {
     if (v.type == EVAL_VAL_STRING && v.as.s) {
         free(v.as.s);
+    } else if (v.type == EVAL_VAL_ENUM) {
+        if (v.as.e.variant_name) free(v.as.e.variant_name);
+        if (v.as.e.payloads) {
+            for (int i = 0; i < v.as.e.payload_count; i++) {
+                eval_value_free(v.as.e.payloads[i]);
+            }
+            free(v.as.e.payloads);
+        }
     }
+}
+
+/* 2.8.0 (FU1): deep copy. Used wherever a stored value escapes to a
+ * caller that will free it independently (env lookups, match-binding
+ * payloads out of the scrutinee). */
+static EvalValue eval_value_clone(EvalValue v) {
+    if (v.type == EVAL_VAL_STRING) return eval_string(v.as.s);
+    if (v.type == EVAL_VAL_ENUM) {
+        EvalValue* payloads = NULL;
+        if (v.as.e.payloads) {
+            payloads = malloc(sizeof(EvalValue) * (size_t)(v.as.e.payload_count > 0 ? v.as.e.payload_count : 1));
+            if (!payloads) { perror("eval_value_clone"); exit(1); }
+            for (int i = 0; i < v.as.e.payload_count; i++) {
+                payloads[i] = eval_value_clone(v.as.e.payloads[i]);
+            }
+        }
+        return eval_enum(v.as.e.tag, v.as.e.variant_name, payloads,
+                         v.as.e.payload_count);
+    }
+    return v;  /* int/float/bool/void/error are plain values */
 }
 
 char* eval_value_to_string(EvalValue v) {
@@ -47,12 +89,72 @@ char* eval_value_to_string(EvalValue v) {
             return strdup(v.as.b ? "true" : "false");
         case EVAL_VAL_STRING:
             return strdup(v.as.s ? v.as.s : "");
+        case EVAL_VAL_ENUM: {
+            /* 2.8.0 (FU1): render like the C runtime — `Some(42)` /
+             * `None` (lamo_value_to_owned_string, lamo_runtime.h).
+             * Payloads render recursively. */
+            size_t cap = 64, len = 0;
+            char* out = malloc(cap);
+            if (!out) return strdup("");
+            out[0] = '\0';
+            #define EVAL_APPEND_STR(s) do { \
+                size_t addlen = strlen(s); \
+                if (len + addlen + 1 > cap) { \
+                    while (len + addlen + 1 > cap) cap *= 2; \
+                    char* grown = realloc(out, cap); \
+                    if (!grown) { free(out); return strdup(""); } \
+                    out = grown; \
+                } \
+                memcpy(out + len, s, addlen); \
+                len += addlen; \
+                out[len] = '\0'; \
+            } while (0)
+            EVAL_APPEND_STR(v.as.e.variant_name ? v.as.e.variant_name : "enum");
+            if (v.as.e.payloads && v.as.e.payload_count > 0) {
+                EVAL_APPEND_STR("(");
+                for (int i = 0; i < v.as.e.payload_count; i++) {
+                    if (i > 0) EVAL_APPEND_STR(", ");
+                    char* elem = eval_value_to_string(v.as.e.payloads[i]);
+                    EVAL_APPEND_STR(elem ? elem : "");
+                    free(elem);
+                }
+                EVAL_APPEND_STR(")");
+            }
+            #undef EVAL_APPEND_STR
+            return out;
+        }
         case EVAL_VAL_VOID:
             return strdup("");
         case EVAL_VAL_ERROR:
             return strdup("<error>");
     }
     return strdup("");
+}
+
+/* 2.8.0 (FU1): structural equality, mirroring the C runtime's
+ * lamo_equal (lamo_runtime.h): enums compare tag-then-payload-wise;
+ * mixed kinds are simply not equal (no error), matching the backend. */
+static int eval_values_equal(EvalValue l, EvalValue r) {
+    if (l.type == EVAL_VAL_ENUM || r.type == EVAL_VAL_ENUM) {
+        if (l.type != r.type) return 0;
+        if (l.as.e.tag != r.as.e.tag) return 0;
+        if (!l.as.e.payloads || !r.as.e.payloads)
+            return l.as.e.payloads == r.as.e.payloads;
+        if (l.as.e.payload_count != r.as.e.payload_count) return 0;
+        for (int i = 0; i < l.as.e.payload_count; i++) {
+            if (!eval_values_equal(l.as.e.payloads[i], r.as.e.payloads[i])) return 0;
+        }
+        return 1;
+    }
+    if (l.type == EVAL_VAL_STRING && r.type == EVAL_VAL_STRING)
+        return strcmp(l.as.s ? l.as.s : "", r.as.s ? r.as.s : "") == 0;
+    if (l.type == EVAL_VAL_BOOL && r.type == EVAL_VAL_BOOL)
+        return l.as.b == r.as.b;
+    if (l.type == EVAL_VAL_INT && r.type == EVAL_VAL_INT)
+        return l.as.i == r.as.i;
+    if (l.type == EVAL_VAL_FLOAT && r.type == EVAL_VAL_FLOAT)
+        return l.as.f == r.as.f;
+    return 0;
 }
 
 /* 2.6.0 (FU5): build the loader's renamed module symbol for a member —
@@ -105,6 +207,99 @@ static void eval_report_private_member(const char* alias, const char* member,
             "and cannot be accessed through the module alias (§10.6 step 2, enforced in 2.7.0)\n"
             "hint: add 'pub' to the declaration of '%s' in the module file to export it explicitly\n",
             line, member ? member : "", alias ? alias : "", member ? member : "");
+}
+
+/* ── 2.8.0 (FU1): enum registry ─────────────────────────────────────
+ * The interpreter needs its own picture of every declared enum to
+ * (a) resolve bare/qualified variant references and constructor calls
+ * in the REPL, which runs NO semantic pass and therefore has no
+ * sema stamps, and (b) know whether an enum is tagged (EVAL_VAL_ENUM)
+ * or legacy untagged (plain int). `lamo eval <file>` also registers
+ * here — it runs sema, but the stamps only cover call/pattern nodes,
+ * while bare identifiers and tagged-ness checks are cheaper through
+ * the table. Registration happens whenever an AST_ENUM_DECL executes
+ * (program pre-pass, statement flow, and module loads alike); the
+ * "later wins" rule for cross-enum variant name collisions (SPEC §3.5)
+ * is implemented by searching the table newest-first. */
+#define EVAL_MAX_ENUMS 64
+#define EVAL_MAX_ENUM_VARIANTS 128
+typedef struct {
+    char* name;                                    /* owned */
+    char* variants[EVAL_MAX_ENUM_VARIANTS];        /* owned strdups */
+    int   payload_counts[EVAL_MAX_ENUM_VARIANTS];
+    int   variant_count;
+    int   tagged;   /* any variant carries payloads (SPEC §3.5) */
+} EvalEnumEntry;
+static EvalEnumEntry eval_enum_table[EVAL_MAX_ENUMS];
+static int eval_enum_table_count = 0;
+
+static void eval_register_enum_decl(ASTEnumDecl* ed) {
+    if (!ed || !ed->name) return;
+    /* Re-declaration in a REPL session replaces the previous entry. */
+    for (int i = 0; i < eval_enum_table_count; i++) {
+        if (strcmp(eval_enum_table[i].name, ed->name) == 0) {
+            for (int v = 0; v < eval_enum_table[i].variant_count; v++)
+                free(eval_enum_table[i].variants[v]);
+            free(eval_enum_table[i].name);
+            for (int j = i; j < eval_enum_table_count - 1; j++)
+                eval_enum_table[j] = eval_enum_table[j + 1];
+            eval_enum_table_count--;
+            break;
+        }
+    }
+    if (eval_enum_table_count >= EVAL_MAX_ENUMS) return;  /* defensive cap */
+    EvalEnumEntry* slot = &eval_enum_table[eval_enum_table_count++];
+    memset(slot, 0, sizeof(*slot));
+    slot->name = strdup(ed->name);
+    slot->variant_count = ed->variant_count > EVAL_MAX_ENUM_VARIANTS
+        ? EVAL_MAX_ENUM_VARIANTS : ed->variant_count;
+    slot->tagged = 0;
+    for (int v = 0; v < slot->variant_count; v++) {
+        slot->variants[v] = strdup(ed->variants[v] ? ed->variants[v] : "");
+        int pc = (ed->variant_payload_counts && ed->variant_payloads)
+            ? ed->variant_payload_counts[v] : 0;
+        slot->payload_counts[v] = pc;
+        if (pc > 0) slot->tagged = 1;
+    }
+}
+
+/* Exact enum lookup (qualified access: `Enum::Variant`). */
+static EvalEnumEntry* eval_find_enum(const char* name) {
+    if (!name) return NULL;
+    for (int i = eval_enum_table_count - 1; i >= 0; i--) {
+        if (strcmp(eval_enum_table[i].name, name) == 0) return &eval_enum_table[i];
+    }
+    return NULL;
+}
+
+/* Bare "later wins" variant lookup across every registered enum
+ * (mirrors the compiler's find_enum_variant_any, semantic.c). Returns
+ * the owning enum entry and sets *vidx_out. */
+static EvalEnumEntry* eval_find_enum_by_variant(const char* variant, int* vidx_out) {
+    if (!variant) return NULL;
+    for (int i = eval_enum_table_count - 1; i >= 0; i--) {
+        EvalEnumEntry* ee = &eval_enum_table[i];
+        for (int v = 0; v < ee->variant_count; v++) {
+            if (strcmp(ee->variants[v], variant) == 0) {
+                if (vidx_out) *vidx_out = v;
+                return ee;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* 2.8.0 (FU1): strip an optional `Enum::` qualifier — constructor call
+ * names may be compound ("Option::Some") and the rendered value must
+ * carry only the variant name (codegen parity: lamo_variant_short_name). */
+static const char* eval_variant_short_name(const char* name) {
+    static char bufs[4][128];
+    static int ring = 0;
+    char* out = bufs[ring];
+    ring = (ring + 1) & 3;
+    const char* sep = name ? strstr(name, "::") : NULL;
+    snprintf(out, sizeof(bufs[0]), "%s", sep ? sep + 2 : (name ? name : ""));
+    return out;
 }
 
 /* ── Environment ─────────────────────────────────────────────────────── */
@@ -195,12 +390,9 @@ int eval_env_get(EvalEnv* env, const char* name, EvalValue* out) {
     for (EvalEnv* e = env; e; e = e->parent) {
         for (EvalBinding* b = e->bindings; b; b = b->next) {
             if (strcmp(b->name, name) == 0) {
-                /* Return a deep copy of strings so caller can free safely. */
-                if (b->value.type == EVAL_VAL_STRING) {
-                    *out = eval_string(b->value.as.s);
-                } else {
-                    *out = b->value;
-                }
+                /* Return a deep copy of heap-holding values (strings,
+                 * enum payloads) so caller can free safely. */
+                *out = eval_value_clone(b->value);
                 return 1;
             }
         }
@@ -213,11 +405,9 @@ int eval_env_set(EvalEnv* env, const char* name, EvalValue value) {
         for (EvalBinding* b = e->bindings; b; b = b->next) {
             if (strcmp(b->name, name) == 0) {
                 eval_value_free(b->value);
-                if (value.type == EVAL_VAL_STRING) {
-                    b->value = eval_string(value.as.s);
-                } else {
-                    b->value = value;
-                }
+                /* 2.8.0: the binding OWNS the value — callers hand
+                 * ownership over on set (same contract as define). */
+                b->value = value;
                 return 1;
             }
         }
@@ -247,6 +437,15 @@ static EvalValue eval_block(ASTBlock* block, EvalEnv* env, EvalSignal* sig);
 static EvalValue eval_call(const char* name, ASTNode** args, int argc,
                             EvalEnv* env, EvalSignal* sig, int line);
 
+/* 2.8.0 (FU1) — enum + match machinery (defined below). */
+static EvalValue eval_enum_ctor_call(long long tag, const char* display_name,
+                                     ASTNode** args, int argc,
+                                     EvalEnv* env, EvalSignal* sig);
+static int eval_pattern_match(LamoPattern* pat, EvalValue scrut,
+                              EvalEnv* bind_env, EvalSignal* sig);
+static EvalValue eval_match_value(ASTMatchStmt* ms, EvalEnv* env,
+                                  EvalSignal* sig, int want_value);
+
 /* ── Expression evaluator ─────────────────────────────────────────────── */
 
 EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
@@ -267,6 +466,20 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
             const char* name = ((ASTIdentifier*)node)->name;
             EvalValue out;
             if (eval_env_get(env, name, &out)) return out;
+            /* 2.8.0 (FU1): bare variant value — `None`, `Red`. A
+             * variable lookup failed, so resolve through the enum
+             * registry: tagged enums materialize as EVAL_VAL_ENUM with
+             * no payloads, legacy untagged enums keep the plain int
+             * representation (identical to the transpiled backend's
+             * deduped variant globals). */
+            {
+                int vidx = -1;
+                EvalEnumEntry* ee = eval_find_enum_by_variant(name, &vidx);
+                if (ee) {
+                    if (ee->tagged) return eval_enum(vidx, name, NULL, 0);
+                    return eval_int(vidx);
+                }
+            }
             RUNTIME_ERROR("undefined variable '%s'", name);
             *sig = EVAL_SIG_ERROR;
             return eval_error();
@@ -290,6 +503,7 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
                            : (right.type == EVAL_VAL_INT)  ? (right.as.i != 0)
                            : (right.type == EVAL_VAL_FLOAT)? (right.as.f != 0.0)
                            : (right.type == EVAL_VAL_STRING)? (right.as.s && right.as.s[0] != '\0')
+                           : (right.type == EVAL_VAL_ENUM) ? 1  /* enums always truthy (runtime parity) */
                            : 0;
                 eval_value_free(right);
                 return eval_bool(!truthy);
@@ -386,13 +600,12 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
                     default: break;
                 }
             }
-            /* Equality for bools and strings. */
+            /* Equality for bools and strings — and 2.8.0 (FU1): tagged
+             * enum values compare structurally (tag first, then
+             * payloads), mirroring lamo_equal in the C runtime. Mixed
+             * kinds compare as not-equal without erroring. */
             if (bin->operator == TOKEN_EQ_EQ || bin->operator == TOKEN_BANG_EQ) {
-                int eq = 0;
-                if (left.type == EVAL_VAL_BOOL && right.type == EVAL_VAL_BOOL)
-                    eq = (left.as.b == right.as.b);
-                else if (left.type == EVAL_VAL_STRING && right.type == EVAL_VAL_STRING)
-                    eq = (strcmp(left.as.s, right.as.s) == 0);
+                int eq = eval_values_equal(left, right);
                 eval_value_free(left); eval_value_free(right);
                 return eval_bool(bin->operator == TOKEN_EQ_EQ ? eq : !eq);
             }
@@ -404,6 +617,17 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
 
         case AST_CALL_EXPR: {
             ASTCallExpr* call = (ASTCallExpr*)node;
+            /* 2.8.0 (FU1): stamped variant constructor — `Some(42)`,
+             * `Option::Some(42)`. `lamo eval <file>` runs the semantic
+             * pass, which annotates constructor calls with
+             * sema_enum_name + sema_variant_index; intercept before
+             * regular function lookup (constructors take precedence,
+             * SPEC §3.5). */
+            if (call->base.sema_enum_name && call->base.sema_variant_index >= 0) {
+                return eval_enum_ctor_call(call->base.sema_variant_index,
+                                           call->name, call->args, call->arg_count,
+                                           env, sig);
+            }
             return eval_call(call->name, call->args, call->arg_count, env, sig, node->line);
         }
 
@@ -511,6 +735,43 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
             return eval_error();
         }
 
+        case AST_VARIANT_REF: {
+            /* 2.8.0 (FU1): qualified unit-variant value —
+             * `Option::None`, `Color::Red` (2.7.0 FU4 syntax). The
+             * semantic pass stamps the variant index when it runs
+             * (`lamo eval`); the registry provides exact qualified
+             * lookup in the REPL (no stamps). */
+            ASTVariantRef* vr = (ASTVariantRef*)node;
+            int idx = -1;
+            EvalEnumEntry* ee = NULL;
+            /* sema stamps are only trustworthy when the semantic pass
+             * actually ran (sema_enum_name non-NULL); fresh REPL nodes
+             * carry index 0 from zero-initialization. */
+            if (node->sema_enum_name && node->sema_variant_index >= 0) {
+                idx = node->sema_variant_index;
+                ee = eval_find_enum(vr->enum_name);
+            } else {
+                ee = eval_find_enum(vr->enum_name);
+                if (ee) {
+                    for (int v = 0; v < ee->variant_count; v++) {
+                        if (vr->variant_name && strcmp(ee->variants[v], vr->variant_name) == 0) {
+                            idx = v;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!ee || idx < 0) {
+                RUNTIME_ERROR("unknown enum variant '%s::%s'",
+                              vr->enum_name ? vr->enum_name : "?",
+                              vr->variant_name ? vr->variant_name : "?");
+                *sig = EVAL_SIG_ERROR;
+                return eval_error();
+            }
+            if (ee->tagged) return eval_enum(idx, vr->variant_name, NULL, 0);
+            return eval_int(idx);  /* legacy untagged: plain int */
+        }
+
         case AST_ARRAY_LITERAL: {
             /* Arrays are not natively representable in EvalValue yet.
              * Return a void placeholder so programs compile without crashing.
@@ -518,9 +779,190 @@ EvalValue eval_expression(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
             return eval_void();
         }
 
+        case AST_MATCH_STMT: {
+            /* 2.8.0 (FU1): match in EXPRESSION position (`let x = match
+             * ... { ... }`, 2.8.0 FU3). Threads the matched arm's value
+             * out; the statement form goes through eval_statement, which
+             * discards it. */
+            ASTMatchStmt* ms = (ASTMatchStmt*)node;
+            return eval_match_value(ms, env, sig, 1);
+        }
+
         default:
             return eval_void();
     }
+}
+
+/* ── 2.8.0 (FU1): enum constructor + match machinery ──────────────────── */
+
+/* Build a tagged enum value from a constructor call's arguments. The
+ * tag comes from the semantic stamps (eval mode) or the registry
+ * (REPL mode); the rendered name is the bare variant name. Takes
+ * ownership of the evaluated payloads (handed to eval_enum). */
+static EvalValue eval_enum_ctor_call(long long tag, const char* display_name,
+                                     ASTNode** args, int argc,
+                                     EvalEnv* env, EvalSignal* sig) {
+    EvalValue* payloads = NULL;
+    if (argc > 0) {
+        payloads = malloc(sizeof(EvalValue) * (size_t)argc);
+        if (!payloads) { perror("eval_enum_ctor_call"); exit(1); }
+    }
+    for (int i = 0; i < argc; i++) {
+        payloads[i] = eval_expression(args[i], env, sig);
+        if (*sig != EVAL_SIG_NONE) {
+            for (int j = 0; j < i; j++) eval_value_free(payloads[j]);
+            free(payloads);
+            return eval_error();
+        }
+    }
+    return eval_enum(tag, eval_variant_short_name(display_name), payloads, argc);
+}
+
+/* Try to match `pat` against `scrut`. Arm bindings are defined in
+ * bind_env (a per-arm frame the caller discards on rejection), so a
+ * failed arm never leaks bindings. Mirrors the compiler's semantics:
+ * tagged enums compare the variant tag then recurse over payloads,
+ * legacy untagged enums compare the plain int index (SPEC §3.5/§4.6). */
+static int eval_pattern_match(LamoPattern* pat, EvalValue scrut,
+                              EvalEnv* bind_env, EvalSignal* sig) {
+    if (!pat) return 0;
+    switch (pat->kind) {
+        case LAMO_PATTERN_WILDCARD:
+            return 1;
+
+        case LAMO_PATTERN_BINDING:
+            /* Legal only in a nested position; the clone gives the arm
+             * frame its own copy of the payload (the scrutinee keeps
+             * ownership of the original). */
+            eval_env_define(bind_env, pat->name, eval_value_clone(scrut));
+            return 1;
+
+        case LAMO_PATTERN_CTOR: {
+            /* Variant resolution: exact stamps when the semantic pass
+             * ran (`lamo eval`), otherwise the registry — qualified
+             * `Enum::Variant` names resolve exactly, bare names use
+             * "later wins" (SPEC §3.5). */
+            int idx = -1;
+            EvalEnumEntry* ee = NULL;
+            if (pat->sema_variant_index >= 0 && pat->sema_enum_name) {
+                idx = pat->sema_variant_index;
+                ee = eval_find_enum(pat->sema_enum_name);
+            } else {
+                const char* sep = strstr(pat->name, "::");
+                if (sep) {
+                    char q_enum[128];
+                    size_t elen = (size_t)(sep - pat->name);
+                    if (elen >= sizeof(q_enum)) elen = sizeof(q_enum) - 1;
+                    memcpy(q_enum, pat->name, elen);
+                    q_enum[elen] = '\0';
+                    ee = eval_find_enum(q_enum);
+                    if (ee) {
+                        const char* q_variant = sep + 2;
+                        for (int v = 0; v < ee->variant_count; v++) {
+                            if (strcmp(ee->variants[v], q_variant) == 0) { idx = v; break; }
+                        }
+                    }
+                } else {
+                    ee = eval_find_enum_by_variant(pat->name, &idx);
+                }
+            }
+            if (!ee || idx < 0) {
+                /* The semantic pass rejects unknown variants before the
+                 * interpreter runs; this is REPL-side defensiveness. */
+                RUNTIME_ERROR("match pattern '%s' is not a known enum variant", pat->name);
+                *sig = EVAL_SIG_ERROR;
+                return 0;
+            }
+
+            if (ee->tagged) {
+                if (scrut.type != EVAL_VAL_ENUM || scrut.as.e.tag != idx) return 0;
+                for (int c = 0; c < pat->child_count; c++) {
+                    LamoPattern* child = pat->children[c];
+                    if (!child || child->kind == LAMO_PATTERN_WILDCARD) continue;
+                    EvalValue* payload = NULL;
+                    if (scrut.as.e.payloads && c < scrut.as.e.payload_count)
+                        payload = &scrut.as.e.payloads[c];
+                    if (!payload) {
+                        RUNTIME_ERROR("variant '%s' carries no payload at position %d",
+                                      ee->variants[idx], c + 1);
+                        *sig = EVAL_SIG_ERROR;
+                        return 0;
+                    }
+                    if (!eval_pattern_match(child, *payload, bind_env, sig)) return 0;
+                }
+                return 1;
+            }
+            /* Legacy untagged enum: the scrutinee IS the int index. */
+            if (scrut.type != EVAL_VAL_INT || scrut.as.i != idx) return 0;
+            if (pat->child_count > 0) {
+                RUNTIME_ERROR("variant '%s' carries no payloads", ee->variants[idx]);
+                *sig = EVAL_SIG_ERROR;
+                return 0;
+            }
+            return 1;
+        }
+
+        default:
+            return 0;
+    }
+}
+
+/* Evaluate a match. want_value=1 (expression position) threads the
+ * matched arm's value out; want_value=0 (statement position) discards
+ * it. Control-flow signals (return/break/continue) and errors propagate
+ * to the caller with their payload intact. Unmatched scrutinees mirror
+ * the C backend: no runtime error, default value. */
+static EvalValue eval_match_value(ASTMatchStmt* ms, EvalEnv* env,
+                                  EvalSignal* sig, int want_value) {
+    EvalValue scrut = eval_expression(ms->scrutinee, env, sig);
+    if (*sig != EVAL_SIG_NONE) return scrut;
+
+    for (int i = 0; i < ms->arm_count; i++) {
+        LamoPattern* pat = ms->patterns[i];
+        if (!pat) continue;
+        EvalEnv* arm_env = eval_env_new(env);
+        int matched = eval_pattern_match(pat, scrut, arm_env, sig);
+        if (matched && *sig != EVAL_SIG_ERROR && ms->guards[i]) {
+            /* `when` guard, evaluated in the arm scope so it can read
+             * the arm's payload bindings (SPEC §4.6). */
+            EvalValue g = eval_expression(ms->guards[i], arm_env, sig);
+            if (*sig == EVAL_SIG_ERROR) {
+                eval_value_free(g);
+                eval_env_free(arm_env);
+                eval_value_free(scrut);
+                return eval_error();
+            }
+            int truthy = (g.type == EVAL_VAL_BOOL)   ? g.as.b :
+                         (g.type == EVAL_VAL_INT)    ? (g.as.i != 0) :
+                         (g.type == EVAL_VAL_FLOAT)  ? (g.as.f != 0.0) :
+                         (g.type == EVAL_VAL_STRING) ? (g.as.s && g.as.s[0]) :
+                         (g.type == EVAL_VAL_ENUM)   ? 1 : 0;
+            eval_value_free(g);
+            matched = truthy;
+        }
+        if (matched && *sig != EVAL_SIG_ERROR) {
+            /* Arm bodies parse as statements (or expressions in the
+             * 2.8.0 FU3 expression form); eval_statement handles both. */
+            EvalValue result = ms->bodies[i]
+                ? eval_statement(ms->bodies[i], arm_env, sig)
+                : eval_void();
+            eval_env_free(arm_env);
+            eval_value_free(scrut);
+            if (!want_value && *sig == EVAL_SIG_NONE) {
+                eval_value_free(result);
+                return eval_void();
+            }
+            return result;  /* value / RETURN / BREAK / CONTINUE payload */
+        }
+        eval_env_free(arm_env);
+        if (*sig == EVAL_SIG_ERROR) {
+            eval_value_free(scrut);
+            return eval_error();
+        }
+    }
+    eval_value_free(scrut);
+    if (want_value) return eval_int(0);  /* backend parity: default int */
+    return eval_void();
 }
 
 /* ── Builtin functions ────────────────────────────────────────────────── */
@@ -564,7 +1006,8 @@ static EvalValue eval_builtin(const char* name, EvalValue* argv, int argc,
         int b = (argv[0].type == EVAL_VAL_BOOL)   ? argv[0].as.b :
                 (argv[0].type == EVAL_VAL_INT)    ? (argv[0].as.i != 0) :
                 (argv[0].type == EVAL_VAL_FLOAT)  ? (argv[0].as.f != 0.0) :
-                (argv[0].type == EVAL_VAL_STRING) ? (argv[0].as.s && argv[0].as.s[0]) : 0;
+                (argv[0].type == EVAL_VAL_STRING) ? (argv[0].as.s && argv[0].as.s[0]) :
+                (argv[0].type == EVAL_VAL_ENUM)   ? 1 : 0;
         return eval_bool(b);
     }
 
@@ -642,6 +1085,30 @@ static EvalValue eval_call(const char* name, ASTNode** args, int argc,
             for (int j = 0; j < i; j++) eval_value_free(argv[j]);
             free(argv);
             return eval_error();
+        }
+    }
+
+    /* 2.8.0 (FU1): variant constructor via the enum registry — the REPL
+     * runs no semantic pass, so there are no stamps here. Payload-variant
+     * constructors take precedence over functions AND builtins, matching
+     * the compiler's resolution order (semantic_visit_call_full only
+     * hijacks calls with payloads; `None()` falls through to the
+     * function path exactly like the compiler, SPEC §3.5). */
+    {
+        int vidx = -1;
+        EvalEnumEntry* ee = eval_find_enum_by_variant(name, &vidx);
+        if (ee && ee->payload_counts[vidx] > 0) {
+            int pcount = ee->payload_counts[vidx];
+            if (pcount != argc) {
+                RUNTIME_ERROR("variant '%s' expects %d payload argument(s), got %d",
+                              name, pcount, argc);
+                for (int i = 0; i < argc; i++) eval_value_free(argv[i]);
+                free(argv);
+                *sig = EVAL_SIG_ERROR;
+                return eval_error();
+            }
+            /* argv transfers into eval_enum. */
+            return eval_enum(vidx, eval_variant_short_name(name), argv, argc);
         }
     }
 
@@ -727,6 +1194,16 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
             return eval_void();
         }
 
+        case AST_ENUM_DECL: {
+            /* 2.8.0 (FU1): register the enum in the interpreter's enum
+             * table so variant references, constructor calls, and match
+             * patterns resolve (SPEC §3.5/§10.7). No runtime effect —
+             * variants materialize on use, like the C backend's deduped
+             * globals. */
+            eval_register_enum_decl((ASTEnumDecl*)node);
+            return eval_void();
+        }
+
         case AST_ASSIGN_STMT: {
             ASTAssignStmt* as = (ASTAssignStmt*)node;
             EvalValue val = eval_expression(as->value, env, sig);
@@ -782,6 +1259,16 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
 
         case AST_CALL_STMT: {
             ASTCallStmt* cs = (ASTCallStmt*)node;
+            /* 2.8.0 (FU1): statement-position constructor call —
+             * `Some(5);`. Stamped by the semantic pass in eval mode
+             * (codegen parity: the 2.7.0 statement-ctor fix). */
+            if (cs->base.sema_enum_name && cs->base.sema_variant_index >= 0) {
+                EvalValue result = eval_enum_ctor_call(cs->base.sema_variant_index,
+                                                       cs->name, cs->args,
+                                                       cs->arg_count, env, sig);
+                eval_value_free(result);
+                return eval_void();
+            }
             EvalValue result = eval_call(cs->name, cs->args, cs->arg_count, env, sig, node->line);
             eval_value_free(result);
             return eval_void();
@@ -825,7 +1312,8 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
             int truthy = (cond.type == EVAL_VAL_BOOL)   ? cond.as.b :
                          (cond.type == EVAL_VAL_INT)    ? (cond.as.i != 0) :
                          (cond.type == EVAL_VAL_FLOAT)  ? (cond.as.f != 0.0) :
-                         (cond.type == EVAL_VAL_STRING) ? (cond.as.s && cond.as.s[0]) : 0;
+                         (cond.type == EVAL_VAL_STRING) ? (cond.as.s && cond.as.s[0]) :
+                         (cond.type == EVAL_VAL_ENUM)   ? 1 : 0;
             eval_value_free(cond);
             if (truthy) return eval_statement(is->then_branch, env, sig);
             if (is->else_branch) return eval_statement(is->else_branch, env, sig);
@@ -839,7 +1327,8 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
                 if (*sig != EVAL_SIG_NONE) return cond;
                 int truthy = (cond.type == EVAL_VAL_BOOL) ? cond.as.b :
                              (cond.type == EVAL_VAL_INT)  ? (cond.as.i != 0) :
-                             (cond.type == EVAL_VAL_FLOAT)? (cond.as.f != 0.0) : 0;
+                             (cond.type == EVAL_VAL_FLOAT)? (cond.as.f != 0.0) :
+                             (cond.type == EVAL_VAL_ENUM) ? 1 : 0;
                 eval_value_free(cond);
                 if (!truthy) break;
 
@@ -864,7 +1353,8 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
                 if (*sig != EVAL_SIG_NONE) { eval_value_free(cond); break; }
                 int truthy = (cond.type == EVAL_VAL_BOOL) ? cond.as.b :
                              (cond.type == EVAL_VAL_INT)  ? (cond.as.i != 0) :
-                             (cond.type == EVAL_VAL_FLOAT)? (cond.as.f != 0.0) : 0;
+                             (cond.type == EVAL_VAL_FLOAT)? (cond.as.f != 0.0) :
+                             (cond.type == EVAL_VAL_ENUM) ? 1 : 0;
                 eval_value_free(cond);
                 if (!truthy) break;
 
@@ -906,6 +1396,12 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
              * to do here. */
             return eval_void();
 
+        case AST_MATCH_STMT:
+            /* 2.8.0 (FU1): match statements evaluate in the interpreter
+             * (was a silent no-op before 2.8.0 — SPEC §10.7 parity with
+             * `lamo run`). Statement position discards the arm value. */
+            return eval_match_value((ASTMatchStmt*)node, env, sig, 0);
+
         default:
             /* Try as expression-statement (e.g. function call as expression). */
             return eval_expression(node, env, sig);
@@ -915,17 +1411,22 @@ EvalValue eval_statement(ASTNode* node, EvalEnv* env, EvalSignal* sig) {
 /* ── Program entry point ──────────────────────────────────────────────── */
 
 int eval_program(ASTProgram* program, EvalEnv* env) {
-    /* Pre-register all top-level functions so forward calls work. */
+    /* Pre-register all top-level functions so forward calls work, and
+     * all enums so variants/ctors resolve before their declaration line
+     * (2.8.0 FU1 — hoisting parity with functions). */
     for (ASTNode* n = program->declarations; n; n = n->next) {
         if (n->type == AST_FN_DECL) {
             ASTFnDecl* fn = (ASTFnDecl*)n;
             eval_env_define_fn(env, fn->name, fn, env);
+        } else if (n->type == AST_ENUM_DECL) {
+            eval_register_enum_decl((ASTEnumDecl*)n);
         }
     }
 
     /* Execute top-level statements in order. */
     for (ASTNode* n = program->declarations; n; n = n->next) {
         if (n->type == AST_FN_DECL) continue; /* already registered */
+        if (n->type == AST_ENUM_DECL) continue; /* already registered (2.8.0) */
         EvalSignal sig = EVAL_SIG_NONE;
         EvalValue result = eval_statement(n, env, &sig);
         eval_value_free(result);

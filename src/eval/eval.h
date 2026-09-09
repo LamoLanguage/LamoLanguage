@@ -26,19 +26,32 @@ typedef enum {
     EVAL_VAL_FLOAT,
     EVAL_VAL_STRING,
     EVAL_VAL_BOOL,
+    EVAL_VAL_ENUM,    /* 2.8.0 (FU1): tagged-union enum value (SPEC §3.5) */
     EVAL_VAL_VOID,    /* result of a statement or a bare return; */
     EVAL_VAL_ERROR    /* propagated runtime error sentinel */
 } EvalValueType;
 
-typedef struct {
+typedef struct EvalValue EvalValue;
+
+struct EvalValue {
     EvalValueType type;
     union {
         long long  i;   /* EVAL_VAL_INT  */
         double     f;   /* EVAL_VAL_FLOAT */
         char*      s;   /* EVAL_VAL_STRING (heap-allocated, owned) */
         int        b;   /* EVAL_VAL_BOOL  */
+        struct {        /* EVAL_VAL_ENUM — mirrors the C runtime's
+                         * LAMO_VALUE_ENUM shape (tag + variant name +
+                         * payload array). Legacy UNTAGGED enums keep
+                         * the plain int representation, exactly like
+                         * the transpiled backend. */
+            long long    tag;           /* variant index within the enum */
+            char*        variant_name;  /* owned strdup ("Some", "None") */
+            EvalValue*   payloads;      /* owned array (NULL for unit) */
+            int          payload_count;
+        } e;
     } as;
-} EvalValue;
+};
 
 /* Convenience constructors */
 EvalValue eval_int(long long i);
@@ -46,11 +59,15 @@ EvalValue eval_float(double f);
 EvalValue eval_string(const char* s);   /* strdup's s */
 EvalValue eval_string_take(char* s);    /* takes ownership */
 EvalValue eval_bool(int b);
+EvalValue eval_enum(long long tag, const char* variant_name,
+                    EvalValue* payloads, int payload_count); /* 2.8.0 (FU1):
+                    takes ownership of payloads (may be NULL) and
+                    strdup's variant_name */
 EvalValue eval_void(void);
 EvalValue eval_error(void);
 
-/* Free any heap resources held by a value (only strings). Safe to call on
- * any EvalValue including VOID, INT, etc. */
+/* Free any heap resources held by a value (strings and enum payloads).
+ * Safe to call on any EvalValue including VOID, INT, etc. */
 void eval_value_free(EvalValue v);
 
 /* ── Signal ─────────────────────────────────────────────────────────────── */

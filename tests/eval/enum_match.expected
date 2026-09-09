@@ -1,0 +1,10 @@
+42
+it is none
+green
+true
+false
+true
+false
+truthy
+Some(Some(x))
+true
