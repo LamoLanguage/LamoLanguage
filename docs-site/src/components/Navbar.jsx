@@ -192,7 +192,7 @@ export default function Navbar() {
 
               {/* GitHub */}
               <a
-                href="https://github.com/lamo-lang/lamo"
+                href="https://github.com/LamoLanguage/LamoLanguage"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex h-9 items-center gap-2 rounded-lg bg-gray-900 px-3 text-xs font-medium text-white transition-all hover:bg-gray-800 hover:shadow-sm dark:bg-[#1a1336] dark:text-purple-200 dark:border dark:border-purple-500/30 dark:hover:bg-[#221845] dark:hover:border-purple-500/50"
