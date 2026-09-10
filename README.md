@@ -244,8 +244,8 @@ Next up (see [`roadmap.md`](roadmap.md) and [`todo.md`](todo.md) for the full pi
 - [x] Traits
 - [x] Trait dictionary dispatch + interpreter value-model completion (2.10.0)
 - [ ] Better formatter (AST-based pretty-printer)
-- [ ] Language Server (LSP)
-- [ ] VSCode extension
+- [x] Language Server (LSP)
+- [x] VSCode extension
 - [ ] Official documentation website
 
 ---
