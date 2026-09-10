@@ -69,3 +69,7 @@ $RECYCLE.BIN/
 # ---------- Local dependency dirs ----------
 deps/
 vendor/
+
+# ---------- Npm dirs ----------
+
+node_modules/

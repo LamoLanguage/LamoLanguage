@@ -246,7 +246,7 @@ Next up (see [`roadmap.md`](roadmap.md) and [`todo.md`](todo.md) for the full pi
 - [x] Better formatter (AST-based pretty-printer) — 2.11.0: canonical layout, minimal parens, comment re-attachment, whitespace-only fallback (src/fmt/, tests/fmt)
 - [x] Language Server (LSP)
 - [x] VSCode extension
-- [ ] Official documentation website
+- [x] Official documentation website
 
 ---
 
