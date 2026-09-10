@@ -1,0 +1,276 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Lamo",
+  "scopeName": "source.lamo",
+  "patterns": [
+    {
+      "include": "#shebang"
+    },
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#declaration"
+    },
+    {
+      "include": "#impl-block"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#type-annotation"
+    },
+    {
+      "include": "#turbofish"
+    },
+    {
+      "include": "#function-call"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "shebang": {
+      "comment": "Optional shebang line.",
+      "match": "^#!.*$",
+      "name": "meta.shebang.lamo"
+    },
+    "comment": {
+      "comment": "Line comment (Lamo only supports //).",
+      "begin": "//",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.lamo"
+        }
+      },
+      "end": "$",
+      "name": "comment.line.double-slash.lamo",
+      "patterns": [
+        {
+          "comment": "Highlighted comment directives (TODO / FIXME / NOTE / SAFETY).",
+          "match": "(?i)(TODO|FIXME|NOTE|SAFETY|XXX)\\b.*",
+          "name": "storage.type.class.lamo"
+        }
+      ]
+    },
+    "string": {
+      "comment": "Double-quoted string with \\\\xNN, \\\\n, \\\\t, \\\\r, \\\\\\\\, \\\\\", \\\\', \\\\0 escapes.",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.lamo"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.lamo"
+        }
+      },
+      "name": "string.quoted.double.lamo",
+      "patterns": [
+        {
+          "match": "\\\\x[0-9a-fA-F]{2}",
+          "name": "constant.character.escape.hex.lamo"
+        },
+        {
+          "match": "\\\\[ntr\\\\\"'\\\\0\\\\\\\\]",
+          "name": "constant.character.escape.lamo"
+        },
+        {
+          "match": "\\\\.",
+          "name": "invalid.illegal.unknown-escape.lamo"
+        }
+      ]
+    },
+    "number": {
+      "comment": "Int, float, hex (0x), binary (0b) with _ separators.",
+      "patterns": [
+        {
+          "comment": "Float with exponent or fraction.",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9_]+)?\\b|\\b[0-9][0-9_]*[eE][+-]?[0-9_]+\\b",
+          "name": "constant.numeric.float.lamo"
+        },
+        {
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b",
+          "name": "constant.numeric.hex.lamo"
+        },
+        {
+          "match": "\\b0[bB][01_]+\\b",
+          "name": "constant.numeric.binary.lamo"
+        },
+        {
+          "match": "\\b[0-9][0-9_]*\\b",
+          "name": "constant.numeric.integer.lamo"
+        }
+      ]
+    },
+    "declaration": {
+      "comment": "fn declarations and parameters.",
+      "patterns": [
+        {
+          "comment": "pub fn / fn name(...) — highlight the name.",
+          "match": "\\b(?:(pub)\\s+)?(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.lamo"
+            },
+            "2": {
+              "name": "keyword.declaration.function.lamo"
+            },
+            "3": {
+              "name": "entity.name.function.lamo"
+            }
+          }
+        },
+        {
+          "comment": "let bindings, optionally annotated: let name: type = ...",
+          "match": "\\b(let)\\s+(mut\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\\s*(:\\s*([a-zA-Z_][a-zA-Z0-9_<>\\[\\].]*))?\\s*(=)?",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.variable.lamo"
+            },
+            "2": {
+              "name": "storage.modifier.lamo"
+            },
+            "3": {
+              "name": "variable.other.lamo"
+            },
+            "5": {
+              "name": "entity.name.type.lamo"
+            },
+            "6": {
+              "name": "keyword.operator.assignment.lamo"
+            }
+          }
+        },
+        {
+          "comment": "struct declaration.",
+          "match": "\\b(?:(pub)\\s+)?(struct)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.lamo"
+            },
+            "2": {
+              "name": "keyword.declaration.struct.lamo"
+            },
+            "3": {
+              "name": "entity.name.type.struct.lamo"
+            }
+          }
+        },
+        {
+          "comment": "enum declaration.",
+          "match": "\\b(?:(pub)\\s+)?(enum)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.lamo"
+            },
+            "2": {
+              "name": "keyword.declaration.enum.lamo"
+            },
+            "3": {
+              "name": "entity.name.type.enum.lamo"
+            }
+          }
+        }
+      ]
+    },
+    "impl-block": {
+      "comment": "impl [Trait for] Type { ... }.",
+      "match": "\\b(impl)\\s+([a-zA-Z_][a-zA-Z0-9_]*(?:<[^>]*>)?)?(\\s+for\\s+([a-zA-Z_][a-zA-Z0-9_]*(?:<[^>]*>)?))?",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.impl.lamo"
+        },
+        "2": {
+          "name": "entity.name.type.trait.lamo"
+        },
+        "3": {
+          "name": "meta.impl.for.lamo"
+        },
+        "4": {
+          "name": "entity.name.type.lamo"
+        }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "comment": "Control-flow and declaration keywords.",
+          "match": "\\b(if|else|while|for|return|break|continue|import|as|match|pub)\\b",
+          "name": "keyword.control.lamo"
+        },
+        {
+          "comment": "Boolean literals.",
+          "match": "\\b(true|false)\\b",
+          "name": "constant.language.boolean.lamo"
+        }
+      ]
+    },
+    "type-annotation": {
+      "comment": "Primitive and named types in annotation position.",
+      "patterns": [
+        {
+          "match": "(?<=:)\\s*\\b(int|float|bool|string|void|array)\\b",
+          "name": "support.type.primitive.lamo"
+        },
+        {
+          "match": "(?<=->)\\s*\\b(int|float|bool|string|void|array)\\b",
+          "name": "support.type.primitive.lamo"
+        },
+        {
+          "comment": "Named types after ':' or '->' (e.g. : Box<int>).",
+          "match": "(?<=(?::|->))\\s*([A-Z][a-zA-Z0-9_]*)\\b",
+          "captures": {
+            "1": {
+              "name": "entity.name.type.lamo"
+            }
+          }
+        }
+      ]
+    },
+    "turbofish": {
+      "comment": "Generic turbofish: Name<...> or std member call arguments.",
+      "match": "\\b([A-Z][a-zA-Z0-9_]*)\\s*<",
+      "captures": {
+        "1": {
+          "name": "entity.name.type.lamo"
+        }
+      }
+    },
+    "function-call": {
+      "comment": "Function call sites.",
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "name": "entity.name.function.call.lamo"
+    },
+    "constants": {
+      "comment": "SCREAMING_CASE constants (e.g. PI, MAX_SIZE).",
+      "match": "\\b[A-Z][A-Z0-9_]{1,}\\b",
+      "name": "constant.other.caps.lamo"
+    },
+    "operators": {
+      "patterns": [
+        {
+          "match": "->|=>|==|!=|<=|>=|&&|\\|\\||[+\\-*/%<>=!]",
+          "name": "keyword.operator.lamo"
+        },
+        {
+          "match": "[{}()\\[\\];,.:]",
+          "name": "punctuation.lamo"
+        }
+      ]
+    }
+  }
+}

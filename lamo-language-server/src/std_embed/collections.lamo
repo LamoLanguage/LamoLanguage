@@ -1,0 +1,499 @@
+// std.collections — Higher-level collection types.
+//
+// Part of the Lamo standard library. Provides List, Stack, Queue,
+// HashMap, and HashSet operations built on top of Lamo's native arrays.
+//
+// API design note: Lamo's static type inference cannot follow struct
+// types across module boundaries (return values from imported functions
+// are typed as UNKNOWN), so the collections API uses module-level
+// functions rather than methods on struct values. The first argument
+// to each function is the collection. This is consistent with how
+// Python's heapq module works, and avoids requiring type annotations
+// at every call site.
+//
+// Internally, collections are represented as plain Lamo arrays:
+//   - List:     [v0, v1, v2, ...]
+//   - Stack:    [bottom, ..., top]    (push/pop from the end)
+//   - Queue:    [front, ..., back]    (enqueue at end, dequeue at front)
+//   - HashMap:  [k0, v0, k1, v1, ...] (flat key/value pairs)
+//   - HashSet:  [v0, v1, ...]         (no duplicates)
+//
+// Usage:
+//   import std.collections as collections
+//   let list = collections.newList()
+//   collections.listPush(list, 10)
+//   collections.listPush(list, 20)
+//   print(collections.listGet(list, 0))   // 10
+//   print(collections.listLen(list))      // 2
+
+// ─── List ────────────────────────────────────────────────────────────
+
+pub fn newList() {
+    return []
+}
+
+pub fn listPush(list, value) {
+    push(list, value)
+    return list.len()
+}
+
+pub fn listPop(list) {
+    return pop(list)
+}
+
+pub fn listGet(list, i) {
+    return list[i]
+}
+
+pub fn listSet(list, i, value) {
+    list[i] = value
+    return value
+}
+
+pub fn listInsert(list, i, value) {
+    let n = list.len()
+    push(list, 0)
+    let j = n
+    while (j > i) {
+        list[j] = list[j - 1]
+        j = j - 1
+    }
+    list[i] = value
+    return list.len()
+}
+
+pub fn listRemoveAt(list, i) {
+    let n = list.len()
+    let removed = list[i]
+    let j = i
+    while (j < n - 1) {
+        list[j] = list[j + 1]
+        j = j + 1
+    }
+    pop(list)
+    return removed
+}
+
+pub fn listContains(list, value) {
+    let i = 0
+    while (i < list.len()) {
+        if (list[i] == value) { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+pub fn listIndexOf(list, value) {
+    let i = 0
+    while (i < list.len()) {
+        if (list[i] == value) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+pub fn listLen(list) {
+    return list.len()
+}
+
+pub fn listIsEmpty(list) {
+    if (list.len() == 0) { return 1 }
+    return 0
+}
+
+pub fn listClear(list) {
+    while (list.len() > 0) {
+        pop(list)
+    }
+    return 0
+}
+
+// ─── Stack (LIFO; push/pop from end) ─────────────────────────────────
+
+pub fn newStack() {
+    return []
+}
+
+pub fn stackPush(stack, value) {
+    push(stack, value)
+    return stack.len()
+}
+
+pub fn stackPop(stack) {
+    return pop(stack)
+}
+
+pub fn stackPeek(stack) {
+    let n = stack.len()
+    if (n == 0) { return 0 }
+    return stack[n - 1]
+}
+
+pub fn stackLen(stack) {
+    return stack.len()
+}
+
+pub fn stackIsEmpty(stack) {
+    if (stack.len() == 0) { return 1 }
+    return 0
+}
+
+pub fn stackClear(stack) {
+    while (stack.len() > 0) {
+        pop(stack)
+    }
+    return 0
+}
+
+// ─── Queue (FIFO; enqueue at end, dequeue at front) ──────────────────
+
+pub fn newQueue() {
+    return []
+}
+
+pub fn queueEnqueue(queue, value) {
+    push(queue, value)
+    return queue.len()
+}
+
+pub fn queueDequeue(queue) {
+    if (queue.len() == 0) { return 0 }
+    let front = queue[0]
+    let i = 0
+    let n = queue.len()
+    while (i < n - 1) {
+        queue[i] = queue[i + 1]
+        i = i + 1
+    }
+    pop(queue)
+    return front
+}
+
+pub fn queuePeek(queue) {
+    if (queue.len() == 0) { return 0 }
+    return queue[0]
+}
+
+pub fn queueLen(queue) {
+    return queue.len()
+}
+
+pub fn queueIsEmpty(queue) {
+    if (queue.len() == 0) { return 1 }
+    return 0
+}
+
+pub fn queueClear(queue) {
+    while (queue.len() > 0) {
+        pop(queue)
+    }
+    return 0
+}
+
+// ─── HashMap (flat key/value pairs in a single array) ────────────────
+
+pub fn newHashMap() {
+    return []
+}
+
+pub fn mapPut(map, key, value) {
+    let i = 0
+    while (i < map.len()) {
+        if (map[i] == key) {
+            map[i + 1] = value
+            return value
+        }
+        i = i + 2
+    }
+    push(map, key)
+    push(map, value)
+    return value
+}
+
+pub fn mapGet(map, key) {
+    let i = 0
+    while (i < map.len()) {
+        if (map[i] == key) { return map[i + 1] }
+        i = i + 2
+    }
+    return 0
+}
+
+pub fn mapGetOr(map, key, default) {
+    let i = 0
+    while (i < map.len()) {
+        if (map[i] == key) { return map[i + 1] }
+        i = i + 2
+    }
+    return default
+}
+
+pub fn mapHas(map, key) {
+    let i = 0
+    while (i < map.len()) {
+        if (map[i] == key) { return 1 }
+        i = i + 2
+    }
+    return 0
+}
+
+pub fn mapRemove(map, key) {
+    let i = 0
+    while (i < map.len()) {
+        if (map[i] == key) {
+            let j = i
+            let n = map.len()
+            while (j < n - 2) {
+                map[j] = map[j + 2]
+                j = j + 1
+            }
+            pop(map)
+            pop(map)
+            return 1
+        }
+        i = i + 2
+    }
+    return 0
+}
+
+pub fn mapLen(map) {
+    return map.len() / 2
+}
+
+pub fn mapKeys(map) {
+    let keys = []
+    let i = 0
+    while (i < map.len()) {
+        push(keys, map[i])
+        i = i + 2
+    }
+    return keys
+}
+
+pub fn mapValues(map) {
+    let values = []
+    let i = 1
+    while (i < map.len()) {
+        push(values, map[i])
+        i = i + 2
+    }
+    return values
+}
+
+pub fn mapClear(map) {
+    while (map.len() > 0) {
+        pop(map)
+    }
+    return 0
+}
+
+// ─── HashSet (no duplicates) ─────────────────────────────────────────
+
+pub fn newHashSet() {
+    return []
+}
+
+pub fn setAdd(setArr, value) {
+    if (setHas(setArr, value) == 0) {
+        push(setArr, value)
+    }
+    return setArr.len()
+}
+
+pub fn setHas(setArr, value) {
+    let i = 0
+    while (i < setArr.len()) {
+        if (setArr[i] == value) { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+pub fn setContains(setArr, value) {
+    return setHas(setArr, value)
+}
+
+pub fn setRemove(setArr, value) {
+    let i = 0
+    while (i < setArr.len()) {
+        if (setArr[i] == value) {
+            let n = setArr.len()
+            let j = i
+            while (j < n - 1) {
+                setArr[j] = setArr[j + 1]
+                j = j + 1
+            }
+            pop(setArr)
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+pub fn setLen(setArr) {
+    return setArr.len()
+}
+
+pub fn setIsEmpty(setArr) {
+    if (setArr.len() == 0) { return 1 }
+    return 0
+}
+
+pub fn setClear(setArr) {
+    while (setArr.len() > 0) {
+        pop(setArr)
+    }
+    return 0
+}
+
+pub fn setToArray(setArr) {
+    return setArr
+}
+
+
+// ─── Generics PR 4: typed collection APIs (RFC §7.2) ──────────────────
+//
+// These are TYPE-CHECKED entry points over the same representations as
+// the legacy functions above. At runtime everything stays an ordinary
+// Lamo array (type erasure — zero cost per RFC §8); at COMPILE time the
+// generic signatures below pin down element/key/value types so mixing
+// them is rejected by `lamo check` instead of corrupting data silently.
+//
+// Spelling rules (RFC §9): the preferred container spelling is
+// `array<T>`; bare `array` still works everywhere (deprecated warning).
+
+// Typed List<T>.
+pub fn typedListNew<T>() -> array<T> {
+    return []
+}
+
+pub fn typedListPush<T>(xs: array<T>, value: T) -> int {
+    push(xs, value)
+    return xs.len()
+}
+
+pub fn typedListPop<T>(xs: array<T>) -> T {
+    return pop(xs)
+}
+
+pub fn typedListGet<T>(xs: array<T>, i: int) -> T {
+    return xs[i]
+}
+
+pub fn typedListLen<T>(xs: array<T>) -> int {
+    return xs.len()
+}
+
+// Typed Map<K,V>. Representation stays the flat pair array shared with
+// newHashMap/mapPut above (erasure), but keys and values are now
+// compile-time constrained.
+struct TypedEntry<K, V> { key: K, value: V }
+
+pub fn typedMapNew<K, V>() -> array<TypedEntry<K,V>> {
+    return []
+}
+
+pub fn typedMapHas<K, V>(m: array<TypedEntry<K,V>>, key: K) -> bool {
+    let i = 0
+    while (i < m.len()) {
+        if (m[i].key == key) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn typedMapGetOr<K, V>(m: array<TypedEntry<K,V>>, key: K, fallback: V) -> V {
+    let i = 0
+    while (i < m.len()) {
+        if (m[i].key == key) { return m[i].value }
+        i = i + 1
+    }
+    return fallback
+}
+
+pub fn typedMapLen<K, V>(m: array<TypedEntry<K,V>>) -> int {
+    return m.len()
+}
+
+// Typed Set<T> (no duplicates enforced via equality).
+pub fn typedSetNew<T>() -> array<T> {
+    return []
+}
+
+pub fn typedSetAdd<T: Eq>(s: array<T>, value: T) -> bool {
+    let i = 0
+    while (i < s.len()) {
+        if (s[i] == value) { return false }
+        i = i + 1
+    }
+    push(s, value)
+    return true
+}
+
+pub fn typedSetHas<T: Eq>(s: array<T>, value: T) -> bool {
+    let i = 0
+    while (i < s.len()) {
+        if (s[i] == value) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+pub fn typedSetLen<T>(s: array<T>) -> int {
+    return s.len()
+}
+
+
+// ─── Generics PR 5: Option<T> / Result<T,E> ───────────────────────────
+//
+// NOTE ON SCOPE (docs/RFC-generics.md §10 lists tagged-union enums as a
+// separate prerequisite): these ship today behind GENERIC, TYPE-CHECKED
+// factory/accessor signatures. The wire representation is the standard
+// erased Lamo array, matching the module-wide design note above ("types
+// cannot flow across module boundaries"), which keeps every operation a
+// plain O(1) call with zero boxing.
+//
+//   Option<T>   [present:int, value]
+//   Result<T,E> [ok:int, value, error]
+//
+// Callers get compile-time checking exactly where it matters: the
+// payload they put IN and the fallback they take OUT. When the
+// tagged-enum RFC lands, Some(x)/Ok(v) pattern syntax will layer onto
+// these same function names.
+
+pub fn optionSome<T>(value: T) -> array {
+    return [1, value];
+}
+
+pub fn optionNone<T>() -> array {
+    return [0, 0];
+}
+
+pub fn optionIsSome<T>(opt: array) -> bool {
+    if (opt.len() == 2 && opt[0] == 1) { return true; }
+    return false;
+}
+
+pub fn optionUnwrapOr<T>(opt: array, fallback: T) -> T {
+    if (opt.len() == 2 && opt[0] == 1) { return opt[1]; }
+    return fallback;
+}
+
+pub fn resultOk<T, E>(value: T) -> array {
+    return [1, value, 0];
+}
+
+pub fn resultErr<T, E>(error: E) -> array {
+    return [0, 0, error];
+}
+
+pub fn resultIsOk<T, E>(res: array) -> bool {
+    if (res.len() == 3 && res[0] == 1) { return true; }
+    return false;
+}
+
+pub fn resultUnwrapOr<T, E>(res: array, fallback: T) -> T {
+    if (res.len() == 3 && res[0] == 1) { return res[1]; }
+    return fallback;
+}

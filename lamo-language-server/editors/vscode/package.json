@@ -1,0 +1,76 @@
+{
+  "name": "lamo-language",
+  "displayName": "Lamo Language",
+  "description": "Lamo language support: syntax highlighting, diagnostics, completions, hover, go-to-definition, document symbols, signature help and highlights — powered by lamo-lsp.",
+  "version": "0.1.0",
+  "publisher": "lamolanguage",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LamoLanguage/LamoLanguage"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "lamo",
+    "language server",
+    "lsp"
+  ],
+  "icon": "icons/lamo.png",
+  "activationEvents": [
+    "onLanguage:lamo"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "lamo",
+        "aliases": [
+          "Lamo",
+          "lamo"
+        ],
+        "extensions": [
+          ".lamo"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lamo",
+        "scopeName": "source.lamo",
+        "path": "./syntaxes/lamo.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Lamo",
+      "properties": {
+        "lamo.server.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `lamo-lsp` server executable. Leave empty to use the bundled server."
+        },
+        "lamo.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace the communication between VS Code and the Lamo language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}
