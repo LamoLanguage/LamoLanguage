@@ -1,0 +1,15 @@
+// Declarations: structs, enums, impls, traits, match, ++/--.
+struct Player { name: string, hp: int }
+enum Option<T> { Some(T), None }
+impl Player {
+fn hit(self, dmg: int) { self.hp -= dmg; }
+}
+trait Shape {
+fn area() -> float;
+}
+fn tick() {
+let i = 0;
+i++;
+i--;
+match 1 { 1 => print("one"), _ => print("other") }
+}

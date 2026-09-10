@@ -5,7 +5,7 @@ CC = gcc
 # debugging through the AST/codegen pipeline.
 # Sprint 5: -Isrc/cli added so the new cli/*.h headers are found after the
 # lamo_v2.c / lampm.c split.
-CFLAGS = -Wall -Wextra -std=c99 -O2 -g -Isrc -Isrc/lexer -Isrc/parser -Isrc/ast -Isrc/codegen -Isrc/semantic -Isrc/eval -Isrc/lampm -Isrc/cli
+CFLAGS = -Wall -Wextra -std=c99 -O2 -g -Isrc -Isrc/lexer -Isrc/parser -Isrc/ast -Isrc/codegen -Isrc/semantic -Isrc/eval -Isrc/lampm -Isrc/cli -Isrc/fmt
 
 # Sprint 3 fix: link the compiler itself with -lm, because codegen.c now
 # uses fmod() directly for constant folding of float % expressions. The
@@ -34,6 +34,7 @@ SRCS = src/lamo_v2.c \
        src/cli/cli_options.c src/cli/paths.c src/cli/import_resolver.c \
        src/cli/commands.c src/cli/compile.c src/cli/help.c \
        src/lexer/lexer.c src/parser/parser.c src/ast/ast.c \
+       src/fmt/formatter.c \
        src/codegen/codegen.c src/semantic/semantic.c src/eval/eval.c \
        src/lampm/lampm.c src/lampm/lampm_util.c src/lampm/lampm_manifest.c \
        src/lampm/lampm_lockfile.c src/lampm/lampm_git.c \
@@ -79,7 +80,8 @@ SRCS_DEP_H = src/lexer/lexer.h src/parser/parser.h src/ast/ast.h \
              src/codegen/lamo_runtime.h src/eval/eval.h \
              src/lampm/lampm.h src/lampm/lampm_internal.h src/modules.h \
              src/cli/cli_options.h src/cli/paths.h src/cli/import_resolver.h \
-             src/cli/commands.h src/cli/compile.h src/cli/help.h
+             src/cli/commands.h src/cli/compile.h src/cli/help.h \
+             src/fmt/formatter.h
 
 %.o: %.c $(SRCS_DEP_H)
 	$(CC) $(CFLAGS) -c $< -o $@

@@ -37,6 +37,7 @@ source text ─▶ lexer ─▶ parser ─▶ AST ─▶ import resolver ─▶ 
 | `src/semantic/` | The semantic pass: symbol tables, scoping, type checking, generics binding, constraint catalogue |
 | `src/codegen/` | C backend: AST → C (`codegen.c`), embedded runtime string data — and the runtime itself lives in one header, see below |
 | `src/eval/` | Tree-walking interpreter backing `lamo eval` / `lamo repl` (fast-feedback path; deliberately NOT module-capable — SPEC §10.7) |
+| `src/fmt/` | AST-based pretty-printer backing `lamo fmt` (2.11.0): canonical layout, minimal parens, comment re-attachment; parse-failure fallback lives in `cli/commands.c` |
 | `src/lampm/` | Integrated package manager (`lamo install`, …); linked into the same binary |
 | `src/modules.c/.h` | Module registry used by namespaced imports |
 | `src/builtins.h` | Single source of truth for every builtin (name, arity, category, return policy). Adding a builtin starts here. |

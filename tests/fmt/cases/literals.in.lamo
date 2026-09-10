@@ -1,0 +1,10 @@
+// Literals: floats round-trip exactly, ints normalize, strings re-escape.
+let pi = 3.141592653589793;
+let half = 0.5;
+let big = 9223372036854775807;
+let hex = 0xFF;
+let bin = 0b1010;
+let underscores = 1_000_000;
+let fexp = 1.5e10;
+let tiny = 0.1;
+let s = "tab\there\nnewline \"quoted\" back\\slash";

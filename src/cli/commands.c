@@ -38,6 +38,7 @@
 #include "eval/eval.h"
 #include "import_resolver.h"
 #include "../modules.h"
+#include "../fmt/formatter.h"
 
 /* command_new: scaffold a new Lamo project. */
 int command_new(int argc, char** argv) {
@@ -585,26 +586,75 @@ found:
 #endif
 }
 
-/* Sprint 4: command_fmt — normalize source formatting in place.
+/* command_fmt — normalize source formatting in place (2.11.0).
  *
- * This is a deliberately conservative formatter. It does NOT reflow
- * expressions, reindent blocks, or rename anything. It only applies
- * safe, idempotent transformations:
+ * Primary path: AST-BASED PRETTY-PRINTING (src/fmt/formatter.{h,c}).
+ * The file is parsed with the real parser and re-emitted from the AST:
+ * 4-space indents, one statement per line, braces on the header line,
+ * explicit semicolons, normalized operator spacing, minimal
+ * parenthesization, shortest-round-trip float literals, and comments
+ * preserved by line position (see formatter.h for the full contract).
  *
- *   - CRLF → LF (Windows line endings normalized to Unix)
- *   - Tabs → 4 spaces (matches the codegen output style)
- *   - Trailing whitespace stripped from each line
- *   - File ends with exactly one trailing newline (no zero, no double)
+ * Fallback: if the file does not parse cleanly, fmt refuses to rewrite
+ * it from the AST (that would silently DROP code) and applies the
+ * legacy whitespace-only normalization instead — CRLF → LF, tabs → 4
+ * spaces, trailing whitespace stripped, exactly one trailing newline.
+ * A note on stderr explains the downgrade. `fmt` therefore never
+ * breaks a file it cannot fully understand.
  *
- * These are the transformations that NEVER change the meaning of a
- * valid Lamo program. A full AST-based pretty-printer (reindent,
- * space normalization around operators, etc.) is future work — see
- * the roadmap. The current command is still useful for keeping a
- * project's files normalized across contributors.
- *
- * --check: read-only mode. Print a diff for each file that would be
+ * --check: read-only mode. Print a summary for each file that would be
  * changed and exit non-zero if any file needs formatting (CI mode).
  * Files are not modified. */
+
+static char* legacy_whitespace_normalize(const char* source) {
+    size_t src_len = strlen(source);
+    size_t out_capacity = src_len * 4 + 2;  /* tabs expand 4x; +NL +NUL */
+    char* out = malloc(out_capacity);
+    if (!out) return NULL;
+    size_t in_pos = 0;
+    size_t out_pos = 0;
+
+    /* Pass 1: CRLF → LF and tabs → 4 spaces. */
+    while (source[in_pos] != '\0') {
+        char c = source[in_pos++];
+        if (c == '\r') {
+            if (source[in_pos] != '\n') out[out_pos++] = '\n';
+            continue;
+        }
+        if (c == '\t') {
+            out[out_pos++] = ' ';
+            out[out_pos++] = ' ';
+            out[out_pos++] = ' ';
+            out[out_pos++] = ' ';
+            continue;
+        }
+        out[out_pos++] = c;
+    }
+    out[out_pos] = '\0';
+
+    /* Pass 2: strip trailing whitespace per line, single final NL.
+     * In-place compaction — output only shrinks. */
+    size_t final_pos = 0;
+    for (in_pos = 0; in_pos < out_pos; ) {
+        char* nl = strchr(out + in_pos, '\n');
+        size_t line_end = nl ? (size_t)(nl - (out + in_pos)) : out_pos - in_pos;
+        size_t trimmed_end = line_end;
+        while (trimmed_end > 0 && (out[in_pos + trimmed_end - 1] == ' ' ||
+                                    out[in_pos + trimmed_end - 1] == '\r')) {
+            trimmed_end--;
+        }
+        memmove(out + final_pos, out + in_pos, trimmed_end);
+        final_pos += trimmed_end;
+        out[final_pos++] = '\n';
+        in_pos += line_end + (nl ? 1 : 0);
+    }
+    while (final_pos >= 2 && out[final_pos - 1] == '\n' && out[final_pos - 2] == '\n') {
+        final_pos--;
+    }
+    out[final_pos] = '\0';
+    return out;
+}
+
 int command_fmt(int argc, char** argv) {
     const char** files = NULL;
     int file_count = 0;
@@ -649,10 +699,6 @@ int command_fmt(int argc, char** argv) {
         const char* path = files[i];
         char* source = read_file(path);
         char* out;
-        size_t out_len;
-        size_t in_pos;
-        size_t out_pos;
-        size_t out_capacity;
 
         if (!source) {
             fprintf(stderr, "failed to read %s: %s\n", path, strerror(errno));
@@ -660,73 +706,24 @@ int command_fmt(int argc, char** argv) {
             continue;
         }
 
-        /* First pass: convert CRLF → LF and tabs → 4 spaces.
-         * Output buffer is at most 4x the input (every tab → 4 spaces).
-         * We allocate that worst case to avoid reallocation. */
-        in_pos = 0;
-        out_pos = 0;
-        {
-            size_t src_len = strlen(source);
-            out_capacity = src_len * 4 + 2;  /* +2 for trailing newline + NUL */
-            out = malloc(out_capacity);
+        /* Primary: AST-based pretty-print. Fallback: whitespace-only. */
+        int ast_ok = 0;
+        out = fmt_format_source(source, path, &ast_ok);
+        if (!ast_ok || !out) {
+            out = legacy_whitespace_normalize(source);
             if (!out) {
                 fprintf(stderr, "out of memory formatting %s\n", path);
                 free(source);
                 rc = EXIT_COMPILE_ERROR;
                 continue;
             }
-        }
-        while (source[in_pos] != '\0') {
-            char c = source[in_pos++];
-            if (c == '\r') {
-                /* Skip; the following \n (if any) will produce the LF. */
-                /* If there's no \n (Mac classic line ending), emit LF. */
-                if (source[in_pos] != '\n') {
-                    out[out_pos++] = '\n';
-                }
-                continue;
+            if (!cli_quiet()) {
+                fprintf(stderr,
+                        "note: %s has syntax errors; applied whitespace-only "
+                        "normalization instead of full formatting\n",
+                        path);
             }
-            if (c == '\t') {
-                out[out_pos++] = ' ';
-                out[out_pos++] = ' ';
-                out[out_pos++] = ' ';
-                out[out_pos++] = ' ';
-                continue;
-            }
-            out[out_pos++] = c;
         }
-        out[out_pos] = '\0';
-
-        /* Second pass: strip trailing whitespace from each line, ensure
-         * exactly one trailing newline. We walk the (now LF-terminated)
-         * buffer line by line, copying trimmed lines into the final
-         * output. Reuse the same buffer — we never grow, only shrink. */
-        out_pos = 0;
-        for (in_pos = 0; in_pos < strlen(out); ) {
-            /* Find the end of this line. */
-            char* nl = strchr(out + in_pos, '\n');
-            size_t line_end = nl ? (size_t)(nl - (out + in_pos)) : strlen(out + in_pos);
-            size_t trimmed_end = line_end;
-            /* Strip trailing spaces (we already converted tabs). */
-            while (trimmed_end > 0 && (out[in_pos + trimmed_end - 1] == ' ' ||
-                                        out[in_pos + trimmed_end - 1] == '\r')) {
-                trimmed_end--;
-            }
-            /* Copy trimmed line into the output (in-place, so it always fits). */
-            memmove(out + out_pos, out + in_pos, trimmed_end);
-            out_pos += trimmed_end;
-            out[out_pos++] = '\n';
-            /* Advance past the original line + its newline. */
-            in_pos += line_end + (nl ? 1 : 0);
-        }
-
-        /* Ensure exactly one trailing newline. If the file is empty,
-         * leave it empty (no trailing newline on an empty file). */
-        while (out_pos >= 2 && out[out_pos - 1] == '\n' && out[out_pos - 2] == '\n') {
-            out_pos--;
-        }
-        out_len = out_pos;
-        out[out_len] = '\0';
 
         /* Compare with original. If unchanged, skip writing. */
         if (strcmp(source, out) == 0) {
@@ -739,9 +736,8 @@ int command_fmt(int argc, char** argv) {
         }
 
         if (check_mode) {
-            /* Print a short diff summary. */
             printf("%s: would reformat (%zu bytes -> %zu bytes)\n",
-                   path, strlen(source), out_len);
+                   path, strlen(source), strlen(out));
             rc = EXIT_COMPILE_ERROR;  /* non-zero signals "needs formatting" */
             free(source);
             free(out);
@@ -758,11 +754,11 @@ int command_fmt(int argc, char** argv) {
                 free(out);
                 continue;
             }
-            fwrite(out, 1, out_len, f);
+            fwrite(out, 1, strlen(out), f);
             fclose(f);
         }
         if (!cli_quiet()) {
-            printf("formatted %s (%zu -> %zu bytes)\n", path, strlen(source), out_len);
+            printf("formatted %s (%zu -> %zu bytes)\n", path, strlen(source), strlen(out));
         }
         free(source);
         free(out);

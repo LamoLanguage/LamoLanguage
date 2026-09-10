@@ -1,0 +1,9 @@
+// Parenthesization: redundant parens drop, required parens stay.
+let a = (1 + 2) * 3;
+let b = 1 + (2 * 3);
+let c = ((1));
+let d = (a + b) * (c - 1);
+let e = -(a);
+let f = !(a || b) && c;
+let g = (a + b).len();
+let h = -(-1);

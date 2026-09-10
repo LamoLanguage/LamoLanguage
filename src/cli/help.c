@@ -21,7 +21,7 @@ void print_usage(const char* prog) {
     printf("  %s new   <project-name>\n", prog);
     printf("  %s clean               (remove generated lamo_exec* artifacts)\n", prog);
     printf("  %s test                (run the test suite under tests/)\n", prog);
-    printf("  %s fmt   <file.lamo>   (normalize source formatting in place)\n", prog);
+    printf("  %s fmt   <file.lamo>   (AST-based pretty-printer, normalizes style)\n", prog);
     printf("\n");
     printf("Package manager subcommands (formerly `lampm`):\n");
     printf("  %s init [project-name]              Create a new lamo.pkg (and scaffold)\n", prog);

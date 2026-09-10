@@ -1,0 +1,11 @@
+// Layout: messy spacing, indentation and semicolons normalize.
+let   x=1
+let y    =    2;
+        let z = x + y
+fn add(a,b) {
+  return a+b
+        }
+fn   messy( a : int ,b )->int {
+        if(a>0){ return a+b }
+    else { return 0 }
+}

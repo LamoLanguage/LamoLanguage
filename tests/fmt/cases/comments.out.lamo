@@ -1,0 +1,15 @@
+// Comments: leading, trailing, block, and tail comments all survive.
+// header stays on top
+let x = 1;  // trailing on x
+/* block on own line */
+let y = 2;
+
+fn f() {
+    // leading inside block
+    let a = 1;  // trailing inside
+    // tail comment at end of block
+}
+
+// between decls
+let z = 3;
+// final comment at EOF

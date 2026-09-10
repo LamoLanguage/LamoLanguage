@@ -344,6 +344,16 @@ if [ -d "$EVAL_DIR" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 4. Formatter tests: the AST-based pretty-printer must format every
+#    parseable file in the corpus without changing its meaning (check
+#    must still pass), be idempotent, and never drop comments.
+# ---------------------------------------------------------------------------
+echo
+echo "== Formatter tests (tests/fmt) =="
+if ! sh tests/fmt/run_fmt_tests.sh "$LAMO"; then
+    record_fail "formatter suite (tests/fmt/run_fmt_tests.sh)"
+fi
+
 # 4. Standard library tests: must `lamo run` and exit 0 (the test files
 #    use std.testing internally and print PASS/FAIL lines themselves;
 #    they exit non-zero if any test failed).

@@ -228,7 +228,7 @@ in [MEMORY-MODEL.md](docs/MEMORY-MODEL.md):
 | Error hints under snippets | missing initializers, undeclared variables/functions, missing `let` on assignment |
 | ANSI color diagnostics (auto TTY detect; `--no-color` / `LAMO_NO_COLOR=1`) | `error_util.h` |
 | Canonical `.lamo` code style defined | [STYLE.md](docs/STYLE.md) |
-| Formatter policy decided | `lamo fmt` stays whitespace-level normalization only, never syntax rewriting (STYLE §7) |
+| Formatter policy updated (2.11.0) | `lamo fmt` is now an AST-based pretty-printer (STYLE §7): canonical layout + minimal parens + comment preservation; whitespace-only normalization remains the fallback for files that do not parse |
 | `lamo test` runs the suite without `make test` | CLI |
 | Quieter success output unless verbose | CLI |
 

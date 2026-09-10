@@ -86,7 +86,39 @@ print(found);
 
 ## 7. Formatter Policy
 
-`lamo fmt` exists and is the enforcement tool; the canonical rules it
-applies are limited to whitespace-level normalization. Bigger normalization
-(syntax rewrites) will NOT be added to fmt — style stays human-owned; fmt
-stays safe-to-run-on-everything.
+`lamo fmt` is the enforcement tool and is **AST-based** (2.11.0): the
+file is parsed with the real parser and re-emitted from the AST with the
+canonical style of this document. The canonical rules the formatter
+applies:
+
+- 4-space indentation; one statement per line; opening brace on the
+  header line, closing brace dedented to the block's level.
+- Explicit semicolons on simple statements (`let`, assignments,
+  `return`, call statements).
+- Space normalization around operators (`a + b`, `!flag`, `arr[i]`,
+  `f(x, y)`); struct/enum/match/struct-literal bodies get one member
+  per line with trailing commas; call/array/param lists do not.
+- MINIMAL PARENTHESIZATION: parentheses are re-derived from operator
+  precedence. Redundant parens the parser recorded as grouping nodes
+  are dropped (`(a) + b` → `a + b`); required parens are kept
+  (`(a + b) * c`, `-(a && b)`).
+- Literals normalize safely: hex/binary/underscore ints print as
+  decimal (same value); floats print in the shortest form that
+  round-trips to the exact same `double` (and keep a visible `.0` /
+  exponent so float-ness survives).
+- `x++` / `x--` are preserved (the parser desugars them to
+  `x = x + 1`; the formatter re-detects the pattern).
+- Comments are not AST nodes; they are re-attached by source line
+  position. Comment TEXT is never altered or dropped — position can
+  only shift when a comment sat inside a multi-line expression.
+- Blank lines: exactly one between top-level declarations (imports
+  cluster with imports, top-level `let` with `let`); function bodies
+  are compact.
+
+Safety contract: a file that does not parse cleanly is NEVER rewritten
+from the AST — fmt falls back to whitespace-only normalization
+(CRLF → LF, tabs → 4 spaces, trailing whitespace stripped, one final
+newline) and notes the downgrade on stderr. `fmt` therefore never
+breaks a file it cannot fully understand. Syntax rewrites that change
+meaning remain out of scope: everything the formatter emits parses back
+to an equivalent program (verified per-file by the `tests/fmt` suite).

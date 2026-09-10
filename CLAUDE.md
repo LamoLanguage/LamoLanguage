@@ -42,7 +42,7 @@ stale generated file (which is committed to the repo).
 ./lamo build <file.lamo> -o demo    # Compile to a binary, do not run
 ./lamo check <file.lamo>            # Parse + semantic-check only
 ./lamo test                         # Run the test suite (tests/run_tests.sh)
-./lamo fmt   <file.lamo>            # Normalize source formatting in place
+./lamo fmt   <file.lamo>            # AST-based pretty-print (in place)
 ./lamo help                         # Show usage
 ./lamo version                      # Print version
 ```
@@ -78,6 +78,16 @@ formalized in `docs/ARCHITECTURE.md`.
   expressions with operator precedence. Records syntax errors in
   `file:line:col` format (matching semantic.c) and recovers via
   synchronize-and-continue so multiple syntax errors are reported in one pass.
+- **src/fmt/formatter.{h,c}** — AST-based pretty-printer backing `lamo fmt`
+  (2.11.0). Parses with the real parser, then re-emits canonical style:
+  4-space indents, one statement per line, explicit semicolons, minimal
+  precedence-derived parenthesization, shortest-round-trip floats,
+  lexer-mirror string re-escaping. Comments are captured by a string-aware
+  pre-scan and re-attached by line position (text never dropped); a brace
+  map (source line of every `{`/`}` pair, in open order) drives the
+  comments-before-`}` flush. Files that fail to parse fall back to
+  whitespace-only normalization in `command_fmt` — fmt never breaks a
+  file it cannot fully understand. Contract: docs/STYLE.md §7.
 - **src/ast/ast.c** — AST node definitions and constructors for all language
   constructs. Each node carries a `file_path` pointer so multi-file builds can
   report errors against the right source file.

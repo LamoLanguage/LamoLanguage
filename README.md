@@ -42,7 +42,7 @@ Instead of executing code through a virtual machine, **Lamo transpiles your prog
 - 🖥 **Native GUI support** — Win32 and X11 backends
 - 🗑 **Opt-in garbage collector** — mark-sweep GC for long-running programs
 - 🧪 **Built-in testing** — `lamo test` plus the `std.testing` module
-- 🛠 **Code formatter** — `lamo fmt` normalizes whitespace-level style
+- 🛠 **Code formatter** — `lamo fmt` is an AST-based pretty-printer (canonical layout, minimal parens, comments preserved; syntax-error files fall back to whitespace-only normalization)
 - 🔁 **REPL & eval** — fast feedback, now with module loading
 
 ---
@@ -164,7 +164,7 @@ make test     # run the full regression suite
 | `lamo build <file.lamo> -o <name>` | Compile to a binary without running it |
 | `lamo check <file.lamo>` | Parse and semantic-check only (great for CI) |
 | `lamo eval` / `lamo repl` | Fast-feedback interpreter (no C compile step) |
-| `lamo fmt <file.lamo>` | Normalize source formatting in place |
+| `lamo fmt <file.lamo>` | AST-based pretty-print, normalized canonical style (in place) |
 | `lamo test` | Run the test suite |
 | `lamo new <project>` | Scaffold a new project (`main.lamo`, `lamo.pkg`, `.gitignore`) |
 | `lamo clean` | Remove generated artifacts (`lamo_exec*`) |
@@ -243,7 +243,7 @@ Next up (see [`roadmap.md`](roadmap.md) and [`todo.md`](todo.md) for the full pi
       full `run_tests.ps1` parity (smoke/golden/std + `.stdin`)
 - [x] Traits
 - [x] Trait dictionary dispatch + interpreter value-model completion (2.10.0)
-- [ ] Better formatter (AST-based pretty-printer)
+- [x] Better formatter (AST-based pretty-printer) — 2.11.0: canonical layout, minimal parens, comment re-attachment, whitespace-only fallback (src/fmt/, tests/fmt)
 - [x] Language Server (LSP)
 - [x] VSCode extension
 - [ ] Official documentation website

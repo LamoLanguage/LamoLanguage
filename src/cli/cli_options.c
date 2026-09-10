@@ -5,7 +5,7 @@
 
 #include "cli_options.h"
 
-#define VERSION "2.10.0"
+#define VERSION "2.11.0"
 
 /* Global CLI options. Set in main() based on argv / env vars.
  * Sprint 5 refactor: these used to be `static` inside lamo_v2.c; they
