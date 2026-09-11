@@ -321,8 +321,17 @@ int compile_sources(const char** input_files, int input_file_count, LamoCommand 
         {
             char c_output_local[256];
             snprintf(c_output_local, sizeof(c_output_local), "%s", c_output_path);
+            /* Optimization pass: the backend now compiles generated C with
+             * -O2. Previously the invocation had NO optimization flag, so
+             * every Lamo program ran at -O0 — directly contradicting the
+             * language's "as fast as a compiled one" promise. -O2 enables
+             * inlining of the static runtime helpers in lamo_runtime.h
+             * (lamo_array_push, LAMO_STR_CONCAT, ...) plus constant
+             * propagation through the LamoValue dispatch loops. -O0 remains
+             * reachable by setting LAMO_CC to a wrapper script if a debug
+             * build of the generated code is ever needed. */
             if (cli_verbose()) {
-                printf("[verbose] invoking C compiler: %s -Wall -Wextra -std=c99 -o %s %s\n",
+                printf("[verbose] invoking C compiler: %s -Wall -Wextra -std=c99 -O2 -o %s %s\n",
                        cc, binary_with_suffix, c_output_local);
             }
 #ifdef _WIN32
@@ -330,7 +339,7 @@ int compile_sources(const char** input_files, int input_file_count, LamoCommand 
             /* On Windows the GUI runtime is always linked (GDI32 is always
              * present), so we don't gate on needs_gui. */
             char* argv[] = {
-                (char*)cc, "-Wall", "-Wextra", "-std=c99",
+                (char*)cc, "-Wall", "-Wextra", "-std=c99", "-O2",
                 "-o", binary_with_suffix, c_output_local,
                 "-lgdi32", "-luser32", "-lws2_32", "-lm",
                 NULL
@@ -339,7 +348,7 @@ int compile_sources(const char** input_files, int input_file_count, LamoCommand 
 #else
             if (needs_gui) {
                 char* argv[] = {
-                    (char*)cc, "-Wall", "-Wextra", "-std=c99",
+                    (char*)cc, "-Wall", "-Wextra", "-std=c99", "-O2",
                     "-o", binary_with_suffix, c_output_local,
                     "-lX11", "-lm",
                     NULL
@@ -347,7 +356,7 @@ int compile_sources(const char** input_files, int input_file_count, LamoCommand 
                 exit_status = run_argv(argv);
             } else {
                 char* argv[] = {
-                    (char*)cc, "-Wall", "-Wextra", "-std=c99",
+                    (char*)cc, "-Wall", "-Wextra", "-std=c99", "-O2",
                     "-o", binary_with_suffix, c_output_local,
                     "-lm",
                     NULL
