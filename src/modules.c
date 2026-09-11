@@ -163,12 +163,18 @@ int lamo_modules_resolve_arity(const LamoModuleRegistry* reg,
 }
 
 char* lamo_module_prefix(const char* alias) {
-    /* "lamo_mod_" + alias + "__" + NUL */
+    /* "lamo_mod_" + alias + "__" + NUL.
+     * Fix (ASan pass): the allocation previously reserved 8 bytes for the
+     * 9-character "lamo_mod_" prefix (alias_len + 8 + 2 + 1), so the
+     * terminating NUL write below ran exactly 1 byte past the buffer —
+     * a heap-buffer-overflow that silently corrupted malloc metadata on
+     * every namespaced import. The 9 below now matches the real prefix
+     * length, matching the memcpy() writes exactly. */
     size_t alias_len;
     char* out;
     if (!alias) return NULL;
     alias_len = strlen(alias);
-    out = malloc(alias_len + 8 + 2 + 1);
+    out = malloc(alias_len + 9 + 2 + 1);
     if (!out) return NULL;
     memcpy(out, "lamo_mod_", 9);
     memcpy(out + 9, alias, alias_len);
