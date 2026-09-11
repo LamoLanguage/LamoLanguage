@@ -44,6 +44,15 @@ typedef struct {
     char* value;
     int line;
     int column;
+    /* Perf pass 2: 1 when `value` points to heap memory owned by this
+     * token (malloc'd by the lexer or strdup'd by a speculative parser
+     * probe) and must be released by token_free(). 0 when `value` points
+     * to a static constant string (punctuators, "EOF") — freeing it
+     * would be UB. Assigning static strings to the ~half of all tokens
+     * that are punctuators removes one malloc+free pair per token from
+     * the hottest loop in the compiler. Consumers must never modify
+     * `value` in place, owned or not. */
+    unsigned char owns_value;
 } Token;
 
 typedef struct {

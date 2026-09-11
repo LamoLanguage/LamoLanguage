@@ -210,6 +210,73 @@ static Token lex_number(Lexer* l, Token t) {
     return t;
 }
 
+/* Perf pass 2: keyword recognition. The previous implementation ran a
+ * linear chain of up to 18 strcmp() calls for EVERY identifier token —
+ * and identifiers are the most common token in real source. This helper
+ * dispatches on the first character (a perfect split: no first letter is
+ * shared by more than 3 keywords) and only strcmp()s within that bucket,
+ * usually resolving in 0–2 comparisons instead of 9 on average.
+ * Returns TOKEN_IDENTIFIER when the word is not a keyword. */
+static LamoTokenType keyword_or_identifier(const char* s) {
+    switch (s[0]) {
+        case 'a':
+            if (strcmp(s, "as") == 0) return TOKEN_AS;            /* Sprint 4 */
+            break;
+        case 'b':
+            if (strcmp(s, "break") == 0) return TOKEN_BREAK;
+            break;
+        case 'c':
+            if (strcmp(s, "continue") == 0) return TOKEN_CONTINUE;
+            break;
+        case 'e':
+            if (strcmp(s, "else") == 0) return TOKEN_ELSE;
+            if (strcmp(s, "enum") == 0) return TOKEN_ENUM;
+            break;
+        case 'f':
+            if (strcmp(s, "fn") == 0) return TOKEN_FN;
+            if (strcmp(s, "for") == 0) return TOKEN_FOR;
+            if (strcmp(s, "false") == 0) return TOKEN_FALSE;
+            break;
+        case 'i':
+            if (strcmp(s, "if") == 0) return TOKEN_IF;
+            if (strcmp(s, "import") == 0) return TOKEN_IMPORT;
+            if (strcmp(s, "impl") == 0) return TOKEN_IMPL;
+            break;
+        case 'l':
+            if (strcmp(s, "let") == 0) return TOKEN_LET;
+            break;
+        case 'm':
+            if (strcmp(s, "match") == 0) return TOKEN_MATCH;
+            break;
+        case 'r':
+            if (strcmp(s, "return") == 0) return TOKEN_RETURN;
+            break;
+        case 's':
+            if (strcmp(s, "struct") == 0) return TOKEN_STRUCT;
+            break;
+        case 't':
+            if (strcmp(s, "true") == 0) return TOKEN_TRUE;
+            if (strcmp(s, "trait") == 0) return TOKEN_TRAIT;   /* 2.9.0 */
+            break;
+        case 'w':
+            if (strcmp(s, "while") == 0) return TOKEN_WHILE;
+            break;
+        default:
+            break;
+    }
+    /* print, input, isnumber, isstring, exit, abs são identificadores
+     * comuns: resolvidos como builtins na tabela de símbolos e no
+     * codegen. self também é um identificador comum — o parser/seântico
+     * tratam disso implicitamente dentro de métodos `impl Type { fn ...
+     * self ... }`. */
+    return TOKEN_IDENTIFIER;
+}
+
+/* Static token text for punctuators. Every '(' token in a program shares
+ * this one literal instead of malloc'ing its own copy; token_free() skips
+ * them via owns_value == 0. */
+#define STATIC_VALUE(s) ((char*)(s))
+
 Token lexer_next_token(Lexer* l) {
     skip_whitespace(l);
 
@@ -217,11 +284,12 @@ Token lexer_next_token(Lexer* l) {
     t.line = l->line;
     t.column = l->column;
     t.value = NULL;
+    t.owns_value = 0;
 
     char c = peek(l);
     if (c == '\0') {
         t.type = TOKEN_EOF;
-        t.value = strdup("EOF");
+        t.value = STATIC_VALUE("EOF");
         return t;
     }
 
@@ -237,31 +305,8 @@ Token lexer_next_token(Lexer* l) {
         int start = l->pos;
         while (isalnum((unsigned char)peek(l)) || peek(l) == '_') advance(l);
         t.value = my_strndup(&l->source[start], (size_t)(l->pos - start));
-
-        if (strcmp(t.value, "let") == 0) t.type = TOKEN_LET;
-        else if (strcmp(t.value, "fn") == 0) t.type = TOKEN_FN;
-        else if (strcmp(t.value, "return") == 0) t.type = TOKEN_RETURN;
-        else if (strcmp(t.value, "if") == 0) t.type = TOKEN_IF;
-        else if (strcmp(t.value, "else") == 0) t.type = TOKEN_ELSE;
-        else if (strcmp(t.value, "while") == 0) t.type = TOKEN_WHILE;
-        else if (strcmp(t.value, "for") == 0) t.type = TOKEN_FOR;
-        else if (strcmp(t.value, "true") == 0) t.type = TOKEN_TRUE;
-        else if (strcmp(t.value, "false") == 0) t.type = TOKEN_FALSE;
-        else if (strcmp(t.value, "import") == 0) t.type = TOKEN_IMPORT;
-        else if (strcmp(t.value, "break") == 0) t.type = TOKEN_BREAK;
-        else if (strcmp(t.value, "continue") == 0) t.type = TOKEN_CONTINUE;
-        else if (strcmp(t.value, "as") == 0) t.type = TOKEN_AS;
-        else if (strcmp(t.value, "struct") == 0) t.type = TOKEN_STRUCT;
-        else if (strcmp(t.value, "impl") == 0) t.type = TOKEN_IMPL;
-        else if (strcmp(t.value, "enum") == 0) t.type = TOKEN_ENUM;
-        else if (strcmp(t.value, "match") == 0) t.type = TOKEN_MATCH;
-        else if (strcmp(t.value, "trait") == 0) t.type = TOKEN_TRAIT;
-        // print, input, isnumber, isstring, exit, abs são identificadores comuns:
-        // resolvidos como builtins na tabela de símbolos e no codegen.
-        // self também é um identificador comum — o parser/seântico tratam disso
-        // implicitamente dentro de métodos `impl Type { fn ... self ... }`.
-        else t.type = TOKEN_IDENTIFIER;
-
+        t.owns_value = 1;
+        t.type = keyword_or_identifier(t.value);
         return t;
     }
 
@@ -286,84 +331,94 @@ Token lexer_next_token(Lexer* l) {
         char* decoded = malloc(raw_len + 1);
         if (!decoded) {
             t.type = TOKEN_STRING;
-            t.value = strdup("");
+            t.value = STATIC_VALUE("");
             return t;
         }
         decode_string_escapes(l->source + start, raw_len, decoded);
         if (peek(l) == '"') advance(l);
         t.type = TOKEN_STRING;
         t.value = decoded;
+        t.owns_value = 1;
         return t;
     }
 
     advance(l);
+    /* Perf pass 2: every punctuator below assigns a static literal and
+     * leaves owns_value == 0 (set at the top of this function). */
     switch (c) {
-        case '(': t.type = TOKEN_LPAREN; t.value = strdup("("); break;
-        case ')': t.type = TOKEN_RPAREN; t.value = strdup(")"); break;
-        case '{': t.type = TOKEN_LBRACE; t.value = strdup("{"); break;
-        case '}': t.type = TOKEN_RBRACE; t.value = strdup("}"); break;
-        case '[': t.type = TOKEN_LBRACKET; t.value = strdup("["); break;
-        case ']': t.type = TOKEN_RBRACKET; t.value = strdup("]"); break;
-        case ',': t.type = TOKEN_COMMA; t.value = strdup(","); break;
-        case ';': t.type = TOKEN_SEMICOLON; t.value = strdup(";"); break;
+        case '(': t.type = TOKEN_LPAREN; t.value = STATIC_VALUE("("); break;
+        case ')': t.type = TOKEN_RPAREN; t.value = STATIC_VALUE(")"); break;
+        case '{': t.type = TOKEN_LBRACE; t.value = STATIC_VALUE("{"); break;
+        case '}': t.type = TOKEN_RBRACE; t.value = STATIC_VALUE("}"); break;
+        case '[': t.type = TOKEN_LBRACKET; t.value = STATIC_VALUE("["); break;
+        case ']': t.type = TOKEN_RBRACKET; t.value = STATIC_VALUE("]"); break;
+        case ',': t.type = TOKEN_COMMA; t.value = STATIC_VALUE(","); break;
+        case ';': t.type = TOKEN_SEMICOLON; t.value = STATIC_VALUE(";"); break;
         case ':':
             /* 2.7.0 (FU4): `::` variant qualification lexes as ONE token
              * (mirrors the `->` / `=>` two-char lookahead above). */
-            if (peek(l) == ':') { advance(l); t.type = TOKEN_COLON_COLON; t.value = strdup("::"); }
-            else { t.type = TOKEN_COLON; t.value = strdup(":"); }
+            if (peek(l) == ':') { advance(l); t.type = TOKEN_COLON_COLON; t.value = STATIC_VALUE("::"); }
+            else { t.type = TOKEN_COLON; t.value = STATIC_VALUE(":"); }
             break;
-        case '.': t.type = TOKEN_DOT; t.value = strdup("."); break;
+        case '.': t.type = TOKEN_DOT; t.value = STATIC_VALUE("."); break;
         case '+':
-            if (peek(l) == '=') { advance(l); t.type = TOKEN_PLUS_EQ; t.value = strdup("+="); }
-            else if (peek(l) == '+') { advance(l); t.type = TOKEN_PLUS_PLUS; t.value = strdup("++"); }
-            else { t.type = TOKEN_PLUS; t.value = strdup("+"); }
+            if (peek(l) == '=') { advance(l); t.type = TOKEN_PLUS_EQ; t.value = STATIC_VALUE("+="); }
+            else if (peek(l) == '+') { advance(l); t.type = TOKEN_PLUS_PLUS; t.value = STATIC_VALUE("++"); }
+            else { t.type = TOKEN_PLUS; t.value = STATIC_VALUE("+"); }
             break;
         case '-':
-            if (peek(l) == '=') { advance(l); t.type = TOKEN_MINUS_EQ; t.value = strdup("-="); }
-            else if (peek(l) == '-') { advance(l); t.type = TOKEN_MINUS_MINUS; t.value = strdup("--"); }
-            else if (peek(l) == '>') { advance(l); t.type = TOKEN_ARROW; t.value = strdup("->"); }
-            else { t.type = TOKEN_MINUS; t.value = strdup("-"); }
+            if (peek(l) == '=') { advance(l); t.type = TOKEN_MINUS_EQ; t.value = STATIC_VALUE("-="); }
+            else if (peek(l) == '-') { advance(l); t.type = TOKEN_MINUS_MINUS; t.value = STATIC_VALUE("--"); }
+            else if (peek(l) == '>') { advance(l); t.type = TOKEN_ARROW; t.value = STATIC_VALUE("->"); }
+            else { t.type = TOKEN_MINUS; t.value = STATIC_VALUE("-"); }
             break;
-        case '*': t.type = TOKEN_STAR; t.value = strdup("*"); break;
-        case '/': t.type = TOKEN_SLASH; t.value = strdup("/"); break;
-        case '%': t.type = TOKEN_PERCENT; t.value = strdup("%"); break;
+        case '*': t.type = TOKEN_STAR; t.value = STATIC_VALUE("*"); break;
+        case '/': t.type = TOKEN_SLASH; t.value = STATIC_VALUE("/"); break;
+        case '%': t.type = TOKEN_PERCENT; t.value = STATIC_VALUE("%"); break;
         case '=':
-            if (peek(l) == '=') { advance(l); t.type = TOKEN_EQ_EQ; t.value = strdup("=="); }
-            else if (peek(l) == '>') { advance(l); t.type = TOKEN_FAT_ARROW; t.value = strdup("=>"); }
-            else { t.type = TOKEN_EQUALS; t.value = strdup("="); }
+            if (peek(l) == '=') { advance(l); t.type = TOKEN_EQ_EQ; t.value = STATIC_VALUE("=="); }
+            else if (peek(l) == '>') { advance(l); t.type = TOKEN_FAT_ARROW; t.value = STATIC_VALUE("=>"); }
+            else { t.type = TOKEN_EQUALS; t.value = STATIC_VALUE("="); }
             break;
         case '!':
-            if (peek(l) == '=') { advance(l); t.type = TOKEN_BANG_EQ; t.value = strdup("!="); }
-            else { t.type = TOKEN_BANG; t.value = strdup("!"); }
+            if (peek(l) == '=') { advance(l); t.type = TOKEN_BANG_EQ; t.value = STATIC_VALUE("!="); }
+            else { t.type = TOKEN_BANG; t.value = STATIC_VALUE("!"); }
             break;
         case '<':
-            if (peek(l) == '=') { advance(l); t.type = TOKEN_LT_EQ; t.value = strdup("<="); }
-            else { t.type = TOKEN_LT; t.value = strdup("<"); }
+            if (peek(l) == '=') { advance(l); t.type = TOKEN_LT_EQ; t.value = STATIC_VALUE("<="); }
+            else { t.type = TOKEN_LT; t.value = STATIC_VALUE("<"); }
             break;
         case '>':
-            if (peek(l) == '=') { advance(l); t.type = TOKEN_GT_EQ; t.value = strdup(">="); }
-            else { t.type = TOKEN_GT; t.value = strdup(">"); }
+            if (peek(l) == '=') { advance(l); t.type = TOKEN_GT_EQ; t.value = STATIC_VALUE(">="); }
+            else { t.type = TOKEN_GT; t.value = STATIC_VALUE(">"); }
             break;
         case '&':
-            if (peek(l) == '&') { advance(l); t.type = TOKEN_AND_AND; t.value = strdup("&&"); }
-            else { t.type = TOKEN_UNKNOWN; t.value = strdup("&"); }
+            if (peek(l) == '&') { advance(l); t.type = TOKEN_AND_AND; t.value = STATIC_VALUE("&&"); }
+            else { t.type = TOKEN_UNKNOWN; t.value = STATIC_VALUE("&"); }
             break;
         case '|':
-            if (peek(l) == '|') { advance(l); t.type = TOKEN_OR_OR; t.value = strdup("||"); }
-            else { t.type = TOKEN_UNKNOWN; t.value = strdup("|"); }
+            if (peek(l) == '|') { advance(l); t.type = TOKEN_OR_OR; t.value = STATIC_VALUE("||"); }
+            else { t.type = TOKEN_UNKNOWN; t.value = STATIC_VALUE("|"); }
             break;
         default:
             t.type = TOKEN_UNKNOWN;
             t.value = malloc(2);
-            t.value[0] = c;
-            t.value[1] = '\0';
+            if (t.value) {
+                t.value[0] = c;
+                t.value[1] = '\0';
+                t.owns_value = 1;
+            }
             break;
     }
     return t;
 }
 
 void token_free(Token t) {
-    free(t.value);
+    /* Perf pass 2: only release heap-owned values. Punctuator tokens and
+     * EOF carry static strings (owns_value == 0) and must not be freed. */
+    if (t.owns_value) {
+        free(t.value);
+    }
 }
 
 int lexer_is_builtin_name(const char* name) {

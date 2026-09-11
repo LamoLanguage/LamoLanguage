@@ -457,6 +457,7 @@ static int probe_angle_type_list(Parser* p, LamoTokenType follow) {
     saved_current.value = p->current.value ? strdup(p->current.value) : NULL;
     saved_current.line = p->current.line;
     saved_current.column = p->current.column;
+    saved_current.owns_value = 1;  /* Perf pass 2: strdup'd above — heap-owned */
 
     int result = 0;
     int depth = 0;
@@ -2937,6 +2938,7 @@ static int parser_try_consume_pub(Parser* p) {
     saved_current.value = p->current.value ? strdup(p->current.value) : NULL;
     saved_current.line = p->current.line;
     saved_current.column = p->current.column;
+    saved_current.owns_value = 1;  /* Perf pass 2: strdup'd above — heap-owned */
 
     advance_p(p);  /* speculative: token after `pub` */
     if (p->current.type == TOKEN_LET || p->current.type == TOKEN_FN ||
