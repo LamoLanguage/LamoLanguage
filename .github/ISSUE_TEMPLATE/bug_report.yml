@@ -1,0 +1,72 @@
+name: Bug report
+description: Report a reproducible problem in the Lamo compiler, runtime, standard library, or tools.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please include a small example that we can run to reproduce it.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the behavior you observed and what you expected instead.
+      placeholder: A clear description of the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include the smallest `.lamo` example and the command needed to reproduce the issue.
+      render: text
+      placeholder: |
+        // Minimal example
+        fn main() {
+            print("...")
+        }
+
+        Command: lamo run example.lamo
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output or error
+      description: Paste the complete compiler/runtime output. Remove secrets or private data.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Lamo version
+      description: Run `lamo version`.
+      placeholder: e.g. 2.10.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: c_compiler
+    attributes:
+      label: C compiler
+      description: Include its version if the issue happens with `lamo run` or `lamo build`.
+      placeholder: e.g. GCC 14.2
+    validations:
+      required: false
